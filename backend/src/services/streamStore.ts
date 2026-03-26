@@ -10,7 +10,7 @@ import {
   Networks,
 } from "@stellar/stellar-sdk";
 import { initDb, getDb } from "./db";
-import { recordEvent } from "./eventHistory";
+import { recordEventWithDb } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 
 export type StreamStatus = "scheduled" | "active" | "completed" | "canceled";
@@ -304,22 +304,27 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     createdAt: nowInSeconds(),
   };
 
-  upsertStream(stream);
-  
-  // Record creation event
-  recordEvent(
-    streamIdStr,
-    "created",
-    stream.createdAt,
-    input.sender,
-    input.totalAmount,
-    {
-      recipient: input.recipient,
-      assetCode: input.assetCode,
-      durationSeconds: input.durationSeconds,
-    },
-  );
-  
+  // Atomically write the stream row and the creation event.
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(
+      db,
+      streamIdStr,
+      "created",
+      stream.createdAt,
+      input.sender,
+      input.totalAmount,
+      {
+        recipient: input.recipient,
+        assetCode: input.assetCode,
+        durationSeconds: input.durationSeconds,
+      },
+    );
+  })();
+
+  // Webhook fires after the transaction commits — a webhook failure
+  // must never roll back an already-persisted stream.
   triggerWebhook("created", stream);
   return stream;
 }
@@ -378,10 +383,15 @@ export async function cancelStream(
   }
 
   stream.canceledAt = nowInSeconds();
-  upsertStream(stream);
-  
-  // Record cancellation event
-  recordEvent(stream.id, "canceled", stream.canceledAt, stream.sender);
+
+  // Atomically write the updated stream row and the cancellation event.
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "canceled", stream.canceledAt!, stream.sender);
+  })();
+
+  // Webhook fires after the transaction commits.
   triggerWebhook("canceled", stream);
   return stream;
 }
@@ -406,19 +416,26 @@ export function updateStreamStartAt(
     throw err;
   }
 
+  // Capture oldStartAt before mutating the record.
+  const oldStartAt = stream.startAt;
   stream.startAt = newStartAt;
-  upsertStream(stream);
-  
-  // Record start time update event
-  recordEvent(
-    stream.id,
-    "start_time_updated",
-    nowInSeconds(),
-    stream.sender,
-    undefined,
-    { oldStartAt: stream.startAt, newStartAt },
-  );
-  
+  const updatedAt = nowInSeconds();
+
+  // Atomically write the updated stream row and the start-time event.
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(
+      db,
+      stream.id,
+      "start_time_updated",
+      updatedAt,
+      stream.sender,
+      undefined,
+      { oldStartAt, newStartAt },
+    );
+  })();
+
   return stream;
 }
 

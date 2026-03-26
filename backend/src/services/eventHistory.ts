@@ -43,6 +43,23 @@ export function recordEvent(
   metadata?: Record<string, any>,
 ): void {
   const db = getDb();
+  recordEventWithDb(db, streamId, eventType, timestamp, actor, amount, metadata);
+}
+
+/**
+ * Insert a stream event using a caller-supplied db handle (or transaction).
+ * Use this when you need to compose the insert inside a better-sqlite3
+ * transaction without calling getDb() from within the transaction callback.
+ */
+export function recordEventWithDb(
+  db: any,
+  streamId: string,
+  eventType: StreamEventType,
+  timestamp: number,
+  actor?: string,
+  amount?: number,
+  metadata?: Record<string, any>,
+): void {
   db.prepare(
     `INSERT INTO stream_events (stream_id, event_type, timestamp, actor, amount, metadata)
      VALUES (@streamId, @eventType, @timestamp, @actor, @amount, @metadata)`,
