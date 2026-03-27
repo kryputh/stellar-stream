@@ -53,7 +53,28 @@ function App() {
 useEffect(() => {
   let active = true;
 
-
+  async function bootstrap() {
+    setLoadingDashboard(true);
+    try {
+      const [streamData, issueData] = await Promise.all([
+        listStreams(filters),
+        listOpenIssues(),
+      ]);
+      if (active) {
+        setStreams(streamData);
+        setIssues(issueData);
+        setGlobalError(null);
+      }
+    } catch (err) {
+      if (active) {
+        setGlobalError(
+          describeGlobalError(
+            err instanceof Error ? err.message : "Failed to load data.",
+          ),
+        );
+      }
+    } finally {
+      if (active) setLoadingDashboard(false);
     }
   }
 
@@ -73,7 +94,7 @@ useEffect(() => {
     active = false;
     window.clearInterval(timer);
   };
-}, [filters]); 
+}, [filters]);
 
   const metrics = useMemo(() => {
     const activeCount = streams.filter(

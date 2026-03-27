@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Stream } from "../types/stream";
 import { getExportCsvUrl, ListStreamsFilters } from "../services/api";
 import { StreamTimeline } from "./StreamTimeline";
+import { getHealthBadges } from "../utils/streamHealthBadges";
 
 interface StreamsTableProps {
   streams: Stream[];
@@ -27,8 +28,51 @@ function formatTimestamp(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+/** Inline filter bar rendered inside the table card. */
+function FilterBar({
+  filters,
+  onChange,
+}: {
+  filters: ListStreamsFilters;
+  onChange: (f: ListStreamsFilters) => void;
+}) {
+  return (
+    <div className="filter-bar">
+      <select
+        value={filters.status ?? ""}
+        onChange={(e) =>
+          onChange({
+            ...filters,
+            status: e.target.value as ListStreamsFilters["status"] || undefined,
+          })
+        }
+        aria-label="Filter by status"
+      >
+        <option value="">All statuses</option>
+        {VALID_STATUSES.map((s) => (
+          <option key={s} value={s}>
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
+export function StreamsTable({
+  streams,
+  filters,
+  onFiltersChange,
+  onCancel,
+  onEditStartTime,
+}: StreamsTableProps) {
+  const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
+
+  function toggleTimeline(id: string) {
+    setExpandedStreamId((prev) => (prev === id ? null : id));
   }
+
+  const exportUrl = getExportCsvUrl(filters as Record<string, string>);
 
   const header = (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
@@ -66,6 +110,9 @@ function formatTimestamp(unixSeconds: number): string {
                   stream.progress.status === "completed" ||
                   stream.progress.status === "canceled";
                 const isExpanded = expandedStreamId === stream.id;
+
+                // Derive health badges for this stream
+                const healthBadges = getHealthBadges(stream);
 
                 return (
                   <>
@@ -111,9 +158,30 @@ function formatTimestamp(unixSeconds: number): string {
                         </div>
                       </td>
                       <td>
-                        <span className={statusClass(stream.progress.status)}>
-                          {stream.progress.status}
-                        </span>
+                        {/*
+                         * Status cell: core status label first, then health
+                         * badges below. Badges are purely additive and never
+                         * replace the status label.
+                         */}
+                        <div className="status-cell">
+                          <span className={statusClass(stream.progress.status)}>
+                            {stream.progress.status}
+                          </span>
+                          {healthBadges.length > 0 && (
+                            <div className="health-badge-row" role="list" aria-label="Health badges">
+                              {healthBadges.map((badge) => (
+                                <span
+                                  key={badge.key}
+                                  className={badge.cssClass}
+                                  title={badge.title}
+                                  role="listitem"
+                                >
+                                  {badge.label}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td>
                         <div className="action-cell">

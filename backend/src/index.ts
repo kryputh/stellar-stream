@@ -5,7 +5,7 @@ import express, { Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { swaggerDocument } from "./swagger";
-
+import { getStreamHistory, getGlobalEvents, countAllEvents } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
 import { initIndexer, startIndexer } from "./services/indexer";
 import { startWebhookWorker } from "./services/webhookWorker";
@@ -420,8 +420,28 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
   }
 });
 
-app.get("/api/events", (_req: Request, res: Response) => {
-  res.json({ data: getAllEvents(50) });
+app.get("/api/events", (req: Request, res: Response) => {
+  const parsedQuery = listEventsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(res, parsedQuery.error.issues);
+    return;
+  }
+
+  const query = parsedQuery.data;
+  const hasPage = req.query.page !== undefined;
+  const hasLimit = req.query.limit !== undefined;
+
+  const eventType = query.eventType as Parameters<typeof getGlobalEvents>[2];
+  const total = countAllEvents(eventType);
+
+  const page = query.page ?? PAGINATION_DEFAULT_PAGE;
+  const limit =
+    !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
+
+  const offset = (page - 1) * limit;
+  const data = getGlobalEvents(limit === 0 ? 0 : limit, offset, eventType);
+
+  res.json({ data, total, page, limit });
 });
 
 

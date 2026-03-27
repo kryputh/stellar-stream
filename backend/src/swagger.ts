@@ -412,7 +412,7 @@ export const swaggerDocument = {
                 $ref: "#/components/schemas/StreamInput",
               },
             },
-
+          },
         },
         responses: {
           "201": {
@@ -453,7 +453,33 @@ export const swaggerDocument = {
         },
       },
     },
-
+    "/api/streams/{id}": {
+      get: {
+        summary: "Get a specific stream",
+        description: "Retrieves a stream by its unique ID.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: {
+              type: "string",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Stream data.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      $ref: "#/components/schemas/Stream",
+                    },
+                  },
                 },
               },
             },

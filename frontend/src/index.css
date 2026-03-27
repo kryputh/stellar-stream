@@ -350,6 +350,71 @@ td {
   background: #fef2f2;
 }
 
+/* ── Health badges (derived, additive — never replace status label) ── */
+
+.badge-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* Starts Soon – blue-tinted */
+.badge-health--soon {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+  color: #0369a1;
+}
+
+/* Claim Pending – amber */
+.badge-health--claim {
+  background: #fef9c3;
+  border-color: #fde047;
+  color: #854d0e;
+}
+
+/* Almost Done – teal/green */
+.badge-health--ending {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
+/* Expiring Soon – orange */
+.badge-health--expiring {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #9a3412;
+}
+
+/* Recently Canceled – rose */
+.badge-health--recent-cancel {
+  background: #ffe4e6;
+  border-color: #fda4af;
+  color: #9f1239;
+}
+
+/* ── Status cell: stacks status label + health badges vertically ── */
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: flex-start;
+}
+
+.health-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
 .issue-list {
   display: grid;
   gap: 0.6rem;
