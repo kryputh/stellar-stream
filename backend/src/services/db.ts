@@ -55,5 +55,23 @@ function migrate(): void {
 
     CREATE INDEX IF NOT EXISTS idx_stream_events_stream_id ON stream_events(stream_id);
     CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp ON stream_events(timestamp);
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      stream_id       TEXT NOT NULL,
+      event           TEXT NOT NULL,
+      payload         TEXT NOT NULL,
+      attempt         INTEGER NOT NULL DEFAULT 0,
+      max_attempts    INTEGER NOT NULL DEFAULT 3,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      next_retry_at   INTEGER,
+      created_at      INTEGER NOT NULL,
+      last_attempt_at INTEGER,
+      error_message   TEXT,
+      FOREIGN KEY (stream_id) REFERENCES streams(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_next_retry ON webhook_deliveries(next_retry_at);
   `);
 }
