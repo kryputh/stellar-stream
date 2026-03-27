@@ -1,12 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { getStreamHistory, listAllEvents, StreamEvent } from "../services/api";
-import { CopyableAddress } from "./CopyableAddress";
 
 interface StreamTimelineProps {
   streamId?: string;
 }
 
-/** Simple "time ago" formatter */
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000 - timestamp);
   if (seconds < 60) return "just now";
@@ -20,11 +18,11 @@ function timeAgo(timestamp: number): string {
 
 function getEventIcon(eventType: string): string {
   switch (eventType) {
-    case "created":          return "🚀";
-    case "claimed":          return "💸";
-    case "canceled":         return "❌";
+    case "created":            return "🚀";
+    case "claimed":            return "💸";
+    case "canceled":           return "❌";
     case "start_time_updated": return "🕐";
-    default:                 return "📋";
+    default:                   return "📋";
   }
 }
 
@@ -55,7 +53,10 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
     setLoading(true);
     setError(null);
     try {
-
+      const data = streamId
+        ? await getStreamHistory(streamId)
+        : await listAllEvents();
+      setEvents(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load history.");
     } finally {
@@ -67,13 +68,23 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
     loadHistory();
   }, [loadHistory]);
 
+  if (loading) return <p className="muted">Loading timeline…</p>;
+  if (error)   return <p className="muted">Error: {error}</p>;
+  if (events.length === 0) return <p className="muted">No events yet.</p>;
 
   return (
     <div className="activity-feed">
       {events.map((event) => (
         <div key={event.id} className="activity-item">
           <div className="activity-icon">{getEventIcon(event.eventType)}</div>
-
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>
+              {event.eventType.replace(/_/g, " ")}
+            </div>
+            <div className="muted">{getEventDescription(event)}</div>
+            <div className="muted" style={{ fontSize: "0.75rem" }}>
+              {timeAgo(event.timestamp)}
+            </div>
           </div>
         </div>
       ))}
