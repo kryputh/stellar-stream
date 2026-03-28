@@ -1145,3 +1145,133 @@ td {
     grid-template-columns: 90px 1fr;
   }
 }
+
+/* ── On-chain Claim Button ─────────────────────────────── */
+
+.btn-claim {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #0ea5a5;
+  border-radius: 8px;
+  min-height: 34px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: white;
+  background: #0ea5a5;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.btn-claim:hover:not(:disabled) {
+  background: #0c9191;
+}
+
+.btn-claim:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-claim--pending {
+  background: #0c9191;
+  cursor: wait;
+}
+
+.btn-claim--confirmed {
+  background: #059669;
+  border-color: #059669;
+  cursor: default;
+}
+
+.btn-claim--failed {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.btn-claim__spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: claim-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes claim-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Claim Toast Notification ──────────────────────────── */
+
+.claim-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  margin-bottom: 1rem;
+  animation: toast-in 0.2s ease;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.claim-toast--success {
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+  color: #166534;
+}
+
+.claim-toast--error {
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+  color: #991b1b;
+}
+
+.claim-toast__icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.claim-toast__msg {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.claim-toast__dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  opacity: 0.6;
+  padding: 0 0.2rem;
+  transition: opacity 0.12s;
+  color: inherit;
+}
+
+.claim-toast__dismiss:hover {
+  opacity: 1;
+}
+
+/* ── Claim Pending Banner ──────────────────────────────── */
+
+.claim-pending-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding: 0.6rem 0.9rem;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #0f766e;
+}
