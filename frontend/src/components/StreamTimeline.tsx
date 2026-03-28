@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getStreamHistory, listAllEvents, StreamEvent } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 
@@ -8,10 +8,6 @@ interface StreamTimelineProps {
 
 export type EventType = StreamEvent["eventType"];
 
-// ---------------------------------------------------------------------------
-// Pure filter logic — extracted so it can be tested without React rendering
-// ---------------------------------------------------------------------------
-
 export function computeFilteredEvents(
   events: StreamEvent[],
   activeFilters: Set<EventType>,
@@ -20,10 +16,7 @@ export function computeFilteredEvents(
   return events.filter((e) => activeFilters.has(e.eventType));
 }
 
-export function toggleFilter(
-  prev: Set<EventType>,
-  type: EventType,
-): Set<EventType> {
+export function toggleFilter(prev: Set<EventType>, type: EventType): Set<EventType> {
   const next = new Set(prev);
   if (next.has(type)) {
     next.delete(type);
@@ -36,9 +29,6 @@ export function toggleFilter(
 export function clearFilters(): Set<EventType> {
   return new Set();
 }
-// ---------------------------------------------------------------------------
-// FilterBar sub-component
-// ---------------------------------------------------------------------------
 
 export interface FilterBarProps {
   activeFilters: Set<EventType>;
@@ -86,11 +76,6 @@ export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) 
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Simple "time ago" formatter */
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000 - timestamp);
   if (seconds < 60) return "just now";
@@ -105,15 +90,30 @@ function timeAgo(timestamp: number): string {
 function getEventIcon(eventType: string): string {
   switch (eventType) {
     case "created":
-      return "🎉";
+      return "CR";
     case "claimed":
-      return "💰";
+      return "CL";
     case "canceled":
-      return "❌";
+      return "CX";
     case "start_time_updated":
-      return "⏰";
+      return "ST";
     default:
-      return "📌";
+      return "EV";
+  }
+}
+
+function formatEventTitle(eventType: string): string {
+  switch (eventType) {
+    case "created":
+      return "Stream created";
+    case "claimed":
+      return "Stream claimed";
+    case "canceled":
+      return "Stream canceled";
+    case "start_time_updated":
+      return "Start time updated";
+    default:
+      return "Stream event";
   }
 }
 
@@ -123,9 +123,9 @@ function getEventDescription(event: StreamEvent): string {
     : "Unknown";
   switch (event.eventType) {
     case "created":
-      return `Initiated by ${actor} for ${event.amount} tokens`;
+      return `Initiated by ${actor} for ${event.amount ?? 0} tokens`;
     case "claimed":
-      return `Claim of ${event.amount} tokens processed by ${actor}`;
+      return `Claim of ${event.amount ?? 0} tokens processed by ${actor}`;
     case "canceled":
       return `Closed by ${actor}`;
     case "start_time_updated":
@@ -139,20 +139,14 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<Set<EventType>>(new Set());
 
+  const isGlobalFeed = useMemo(() => !streamId, [streamId]);
   const filteredEvents = useMemo(
     () => computeFilteredEvents(events, activeFilters),
     [events, activeFilters],
   );
-
-  function handleToggleFilter(type: EventType) {
-    setActiveFilters((prev) => toggleFilter(prev, type));
-  }
-
-  function handleClearFilters() {
-    setActiveFilters(clearFilters());
-  }
 
   const loadHistory = useCallback(async () => {
     try {
@@ -162,6 +156,7 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
         ? await getStreamHistory(streamId)
         : await listAllEvents();
       setEvents(data);
+      setLastUpdatedAt(Date.now());
     } catch (err: any) {
       setError(err.message || "Failed to load stream history");
     } finally {
@@ -174,47 +169,94 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
   }, [loadHistory]);
 
   if (loading) {
-    return <div className="text-gray-500">Loading history...</div>;
+    return (
+      <div className="activity-feed">
+        {Array.from({ length: 3 }).map((_, idx) => (
+          <div key={`activity-skeleton-${idx}`} className="skeleton skeleton-item" />
+        ))}
+      </div>
+    );
   }
 
   if (error) {
-    return <div className="text-red-500">Error: {error}</div>;
+    return (
+      <div className="activity-error">
+        <h3>Unable to load activity</h3>
+        <p>{error}</p>
+        <button type="button" className="retry-btn" onClick={loadHistory}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (events.length === 0) {
+    return (
+      <div className="activity-empty">
+        <span className="activity-empty-icon" aria-hidden>
+          --
+        </span>
+        <p>No activity to show yet.</p>
+      </div>
+    );
+  }
+
+  if (filteredEvents.length === 0 && activeFilters.size > 0) {
+    return (
+      <div className="activity-empty">
+        <span className="activity-empty-icon" aria-hidden>
+          --
+        </span>
+        <p>No events match the selected filters. Clear filters to see all events.</p>
+        <button type="button" className="btn-ghost" onClick={() => setActiveFilters(clearFilters())}>
+          Clear filters
+        </button>
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold">Stream Timeline</h3>
-      <FilterBar
-        activeFilters={activeFilters}
-        onToggle={handleToggleFilter}
-        onClear={handleClearFilters}
-      />
-      {events.length === 0 ? (
-        <div className="text-gray-500">No events found</div>
-      ) : filteredEvents.length === 0 && activeFilters.size > 0 ? (
-        <div className="text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-4">
-          No events match the selected filters. Try adjusting or clearing your filters.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {filteredEvents.map((event: StreamEvent) => (
-            <div
-              key={event.id}
-              className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200"
-            >
-              <div className="text-2xl">{getEventIcon(event.eventType)}</div>
-              <div className="flex-1">
-                <div className="font-medium text-gray-900">
-                  {getEventDescription(event)}
-                </div>
-                <div className="text-sm text-gray-500">
-                  {timeAgo(event.timestamp)}
-                </div>
-              </div>
-            </div>
-          ))}
+    <div className="activity-feed">
+      {isGlobalFeed && (
+        <div className="activity-meta" style={{ justifyContent: "space-between" }}>
+          <span>
+            Latest across all streams
+            {lastUpdatedAt ? ` · updated ${timeAgo(Math.floor(lastUpdatedAt / 1000))}` : ""}
+          </span>
+          <button type="button" className="btn-ghost" onClick={loadHistory}>
+            Refresh
+          </button>
         </div>
       )}
+      <FilterBar
+        activeFilters={activeFilters}
+        onToggle={(type) => setActiveFilters((prev) => toggleFilter(prev, type))}
+        onClear={() => setActiveFilters(clearFilters())}
+      />
+      {filteredEvents.map((event) => (
+        <div key={event.id} className="activity-item">
+          <div className="activity-icon">{getEventIcon(event.eventType)}</div>
+          <div className="activity-content">
+            <p className="activity-title">{formatEventTitle(event.eventType)}</p>
+            <div className="activity-meta">
+              <span>{timeAgo(event.timestamp)}</span>
+              {isGlobalFeed && (
+                <a href={`#stream-${event.streamId}`} className="muted">
+                  Stream {event.streamId}
+                </a>
+              )}
+            </div>
+            <div className="muted" style={{ marginTop: "0.35rem" }}>
+              {getEventDescription(event)}
+            </div>
+            {event.actor && (
+              <div style={{ marginTop: "0.5rem" }}>
+                <CopyableAddress address={event.actor} truncationMode="end" />
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
