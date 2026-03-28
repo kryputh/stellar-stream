@@ -11,6 +11,7 @@ interface StreamsTableProps {
   onFiltersChange: (f: ListStreamsFilters) => void;
   onCancel: (streamId: string) => Promise<void>;
   onEditStartTime: (stream: Stream) => void;
+  onViewDetail?: (streamId: string) => void;
 }
 
 function statusClass(status: Stream["progress"]["status"]): string {
@@ -38,6 +39,7 @@ export function StreamsTable({
   onFiltersChange: _onFiltersChange,
   onCancel,
   onEditStartTime,
+  onViewDetail,
 }: StreamsTableProps) {
   const exportUrl = getExportCsvUrl(filters as Record<string, string>);
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
@@ -158,6 +160,16 @@ export function StreamsTable({
                       </td>
                       <td>
                         <div className="action-cell">
+                          {onViewDetail && (
+                            <button
+                              className="btn-ghost btn-view"
+                              type="button"
+                              title="View stream detail"
+                              onClick={() => onViewDetail(stream.id)}
+                            >
+                              View
+                            </button>
+                          )}
                           {isScheduled && (
                             <button
                               className="btn-ghost btn-edit"
