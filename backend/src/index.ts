@@ -1,9 +1,14 @@
 import cors from "cors";
 import { requestLogger } from "./middleware/requestLogger";
 import "dotenv/config";
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
+import {
+  normalizeUnknownApiError,
+  sendApiError,
+  sendValidationError,
+} from "./apiErrors";
 import { swaggerDocument } from "./swagger";
 
 import {
@@ -46,8 +51,6 @@ import {
   senderAccountIdSchema,
   streamIdSchema,
   updateStreamStartAtSchema,
-  zodIssuesToErrorMessage,
-  zodIssuesToValidationIssues,
 } from "./validation/schemas";
 import { validateEnv } from "./config/validateEnv";
 
@@ -101,13 +104,6 @@ app.use(requestLogger);
 app.use(express.json());
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-function sendValidationError(res: Response, issues: z.ZodIssue[]) {
-  res.status(400).json({
-    error: zodIssuesToErrorMessage(issues),
-    details: zodIssuesToValidationIssues(issues),
-  });
-}
-
 function parseStreamId(streamIdRaw: unknown):
   | { ok: true; value: string }
   | { ok: false; issues: z.ZodIssue[] } {
@@ -148,7 +144,7 @@ app.get("/api/assets", (_req: Request, res: Response) => {
 app.get("/api/streams", (req: Request, res: Response) => {
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    sendValidationError(res, parsedQuery.error.issues);
+    sendValidationError(req, res, parsedQuery.error.issues);
     return;
   }
 
@@ -213,7 +209,7 @@ app.get("/api/streams", (req: Request, res: Response) => {
 app.get("/api/events", (req: Request, res: Response) => {
   const parsedQuery = listEventsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    sendValidationError(res, parsedQuery.error.issues);
+    sendValidationError(req, res, parsedQuery.error.issues);
     return;
   }
 
@@ -276,13 +272,13 @@ app.get("/api/streams/export.csv", (req: Request, res: Response) => {
 app.get("/api/streams/:id", (req: Request, res: Response) => {
   const parsedId = parseStreamId(req.params.id);
   if (!parsedId.ok) {
-    sendValidationError(res, parsedId.issues);
+    sendValidationError(req, res, parsedId.issues);
     return;
   }
 
   const stream = getStream(parsedId.value);
   if (!stream) {
-    res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
+    sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
     return;
   }
 
@@ -298,7 +294,7 @@ app.get("/api/recipients/:accountId/streams", (req: Request, res: Response) => {
   });
   
   if (!parsedParams.success) {
-    sendValidationError(res, parsedParams.error.issues);
+    sendValidationError(req, res, parsedParams.error.issues);
     return;
   }
 
@@ -368,7 +364,7 @@ app.get("/api/senders/:accountId/streams", (req: Request, res: Response) => {
   });
 
   if (!parsedParams.success) {
-    sendValidationError(res, parsedParams.error.issues);
+    sendValidationError(req, res, parsedParams.error.issues);
     return;
   }
 
@@ -376,7 +372,7 @@ app.get("/api/senders/:accountId/streams", (req: Request, res: Response) => {
 
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    sendValidationError(res, parsedQuery.error.issues);
+    sendValidationError(req, res, parsedQuery.error.issues);
     return;
   }
   const query = parsedQuery.data;
@@ -433,7 +429,9 @@ app.get("/api/senders/:accountId/streams", (req: Request, res: Response) => {
 app.get("/api/auth/challenge", (req: Request, res: Response) => {
   const accountId = req.query.accountId;
   if (typeof accountId !== "string" || !accountId.trim()) {
-    res.status(400).json({ error: "accountId query parameter is required." });
+    sendApiError(req, res, 400, "accountId query parameter is required.", {
+      code: "VALIDATION_ERROR",
+    });
     return;
   }
 
@@ -441,15 +439,16 @@ app.get("/api/auth/challenge", (req: Request, res: Response) => {
     const challengeTransaction = generateChallenge(accountId.trim());
     res.json({ transaction: challengeTransaction });
   } catch (error: any) {
-    console.error(`[Auth] Failed to generate challenge for ${accountId}:`, error);
-    res.status(500).json({ error: "Failed to generate challenge transaction." });
+
   }
 });
 
 app.post("/api/auth/token", (req: Request, res: Response) => {
   const transaction = req.body?.transaction;
   if (typeof transaction !== "string" || !transaction.trim()) {
-    res.status(400).json({ error: "transaction in body is required." });
+    sendApiError(req, res, 400, "transaction in body is required.", {
+      code: "VALIDATION_ERROR",
+    });
     return;
   }
 
@@ -457,11 +456,7 @@ app.post("/api/auth/token", (req: Request, res: Response) => {
     const token = verifyChallengeAndIssueToken(transaction);
     res.json({ token });
   } catch (error: any) {
-    res.status(401).json({
-      error: error.message,
-      code: "UNAUTHORIZED",
-      requestId: req.requestId,
-    });
+
   }
 });
 
@@ -470,7 +465,7 @@ app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => 
     req.body,
   );
   if (!parsedBody.success) {
-    sendValidationError(res, parsedBody.error.issues);
+    sendValidationError(req, res, parsedBody.error.issues);
     return;
   }
 
@@ -491,9 +486,9 @@ app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => 
     });
   } catch (error: any) {
     console.error("Failed to create stream:", error);
-    res.status(500).json({
-      error: error.message || "Failed to create stream.",
-      requestId: req.requestId,
+    const normalizedError = normalizeUnknownApiError(error, "Failed to create stream.");
+    sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+      code: normalizedError.code ?? "INTERNAL_ERROR",
     });
   }
 });
@@ -504,7 +499,7 @@ app.post(
   async (req: Request, res: Response) => {
     const parsedId = parseStreamId(req.params.id);
     if (!parsedId.ok) {
-      sendValidationError(res, parsedId.issues);
+      sendValidationError(req, res, parsedId.issues);
       return;
     }
 
@@ -527,7 +522,10 @@ app.post(
 
     } catch (error: any) {
       console.error("Failed to cancel stream:", error);
-      res.status(500).json({ error: error.message || "Failed to cancel stream." });
+      const normalizedError = normalizeUnknownApiError(error, "Failed to cancel stream.");
+      sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+        code: normalizedError.code ?? "INTERNAL_ERROR",
+      });
     }
   },
 );
@@ -538,7 +536,7 @@ app.patch(
   (req: Request, res: Response) => {
     const parsedId = parseStreamId(req.params.id);
     if (!parsedId.ok) {
-      sendValidationError(res, parsedId.issues);
+      sendValidationError(req, res, parsedId.issues);
       return;
     }
 
@@ -562,7 +560,7 @@ app.patch(
 
     const parsedBody = updateStreamStartAtSchema.safeParse(req.body);
     if (!parsedBody.success) {
-      sendValidationError(res, parsedBody.error.issues);
+      sendValidationError(req, res, parsedBody.error.issues);
       return;
     }
 
@@ -584,8 +582,6 @@ app.patch(
     const now = Math.floor(Date.now() / 1000);
     const newStartAt = parsedBody.data.startAt;
 
-    if (newStartAt <= now) {
-      res.status(400).json({ error: "startAt must be in the future." });
       return;
     }
 
@@ -593,10 +589,13 @@ app.patch(
       const updatedStream = updateStreamStartAt(parsedId.value, newStartAt);
       res.json({ data: { ...updatedStream, progress: calculateProgress(updatedStream) } });
     } catch (error: any) {
-      const statusCode = error.statusCode ?? 500;
-      res
-        .status(statusCode)
-        .json({ error: error.message || "Failed to update stream start time." });
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to update stream start time.",
+      );
+      sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+        code: normalizedError.code ?? "INTERNAL_ERROR",
+      });
     }
   },
 );
@@ -604,13 +603,13 @@ app.patch(
 app.get("/api/streams/:id/history", (req: Request, res: Response) => {
   const parsedId = parseStreamId(req.params.id);
   if (!parsedId.ok) {
-    sendValidationError(res, parsedId.issues);
+    sendValidationError(req, res, parsedId.issues);
     return;
   }
 
   const stream = getStream(parsedId.value);
   if (!stream) {
-    res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
+    sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
     return;
   }
 
@@ -620,13 +619,13 @@ app.get("/api/streams/:id/history", (req: Request, res: Response) => {
 app.get("/api/streams/:id/snapshot", (req: Request, res: Response) => {
   const parsedId = parseStreamId(req.params.id);
   if (!parsedId.ok) {
-    sendValidationError(res, parsedId.issues);
+    sendValidationError(req, res, parsedId.issues);
     return;
   }
 
   const stream = getStream(parsedId.value);
   if (!stream) {
-    res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
+    sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
     return;
   }
 
@@ -644,15 +643,19 @@ app.get("/api/streams/:id/snapshot", (req: Request, res: Response) => {
   });
 });
 
-app.get("/api/open-issues", async (_req: Request, res: Response) => {
+app.get("/api/open-issues", async (req: Request, res: Response) => {
   try {
     const data = await fetchOpenIssues();
     res.json({ data });
   } catch (error: any) {
     console.error("Failed to fetch open issues from proxy:", error);
-    res.status(500).json({ error: error.message || "Failed to fetch open issues." });
+    const normalizedError = normalizeUnknownApiError(error, "Failed to fetch open issues.");
+    sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+      code: normalizedError.code ?? "INTERNAL_ERROR",
+    });
   }
 });
+
 
 
  

@@ -253,14 +253,40 @@ export const swaggerDocument = {
       },
       Error: {
         type: "object",
+        required: ["error", "statusCode"],
         properties: {
           error: {
             type: "string",
             example: "Stream not found.",
           },
+          statusCode: {
+            type: "integer",
+            example: 404,
+          },
           requestId: {
             type: "string",
             example: "req_123456789",
+          },
+          code: {
+            type: "string",
+            example: "NOT_FOUND",
+          },
+          details: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["field", "message"],
+              properties: {
+                field: {
+                  type: "string",
+                  example: "startAt",
+                },
+                message: {
+                  type: "string",
+                  example: "startAt must be in the future.",
+                },
+              },
+            },
           },
         },
       },

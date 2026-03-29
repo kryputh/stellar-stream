@@ -154,7 +154,7 @@ function invokeListStreamsRoute(
   let statusCode = 200;
   let jsonBody: any;
 
-  const req = { query };
+  const req = { query, requestId: "test-request-id" };
   const res = {
     status(code: number) {
       statusCode = code;
@@ -188,7 +188,7 @@ function invokeSenderStreamsRoute(
   let statusCode = 200;
   let jsonBody: any;
 
-  const req = { params: { accountId }, query };
+  const req = { params: { accountId }, query, requestId: "test-request-id" };
   const res = {
     status(code: number) {
       statusCode = code;
@@ -298,6 +298,16 @@ describe("GET /api/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("status must be one of");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "status",
+        }),
+      ]),
+    );
   });
 
   it("returns 400 for invalid page", () => {
@@ -305,6 +315,8 @@ describe("GET /api/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("page must be greater than or equal to 1");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns 400 for invalid limit", () => {
@@ -312,6 +324,8 @@ describe("GET /api/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("limit must be less than or equal to 100");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns empty data for out-of-range page with metadata intact", () => {
@@ -365,6 +379,9 @@ describe("GET /api/senders/:accountId/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("Must be a valid Stellar account ID");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
+    expect(body.code).toBe("VALIDATION_ERROR");
   });
 
   it("paginates correctly", () => {
@@ -413,7 +430,7 @@ function invokeGlobalEventsRoute(
   let statusCode = 200;
   let jsonBody: any;
 
-  const req = { query };
+  const req = { query, requestId: "test-request-id" };
   const res = {
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
@@ -498,6 +515,8 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("eventType must be one of");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns 400 for page < 1", () => {
@@ -505,6 +524,8 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("page must be greater than or equal to 1");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns 400 for limit > 100", () => {
@@ -512,6 +533,8 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("limit must be less than or equal to 100");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns empty data array for out-of-range page with metadata intact", () => {
