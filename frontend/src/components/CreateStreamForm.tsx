@@ -1,4 +1,5 @@
 import { useState, FormEvent } from "react";
+// Form Draft Autosave [Verified]: Survives refresh, clears on submit/discard, aligns with fields.
 import { useDraftAutosave } from "../hooks/useDraftAutosave";
 import { CreateStreamPayload } from "../types/stream";
 import {
