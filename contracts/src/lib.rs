@@ -211,10 +211,13 @@ impl StellarStreamContract {
         let min_end = if now > stream.start_time {
             now
         } else {
-            stream.start_time + 1
+            stream.start_time
         };
         if min_end < stream.end_time {
             stream.end_time = min_end;
+            // Adjust total_amount to match the vested amount at cancel time
+            // This ensures that the vested calculation remains correct after truncation
+            stream.total_amount = vested;
         }
 
         if sender_refund > 0 {
@@ -256,7 +259,7 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let total_duration = stream.end_time - stream.start_time;
 
     if total_duration == 0 {
-        return stream.total_amount;
+        return 0;
     }
 
     stream.total_amount * (elapsed as i128) / (total_duration as i128)
