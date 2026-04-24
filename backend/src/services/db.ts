@@ -74,6 +74,16 @@ function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_next_retry ON webhook_deliveries(next_retry_at);
 
+    CREATE TABLE IF NOT EXISTS webhook_dead_letters (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      url             TEXT NOT NULL,
+      payload         TEXT NOT NULL,
+      last_error      TEXT,
+      failed_at       INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_dead_letters_failed_at ON webhook_dead_letters(failed_at);
+
     CREATE TABLE IF NOT EXISTS indexer_cursor (
       id TEXT PRIMARY KEY,
       last_ledger INTEGER NOT NULL
