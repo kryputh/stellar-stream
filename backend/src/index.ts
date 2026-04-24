@@ -17,6 +17,7 @@ import {
   getAllEvents,
   getGlobalEvents,
   getStreamHistory,
+  countStreamEvents,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
 import { initIndexer, startIndexer } from "./services/indexer";
@@ -61,6 +62,8 @@ const STREAM_STATUSES: StreamStatus[] = [
 const PAGINATION_DEFAULT_PAGE = 1;
 const PAGINATION_DEFAULT_LIMIT = 20;
 const PAGINATION_MAX_LIMIT = 100;
+const STREAM_HISTORY_DEFAULT_LIMIT = 50;
+const STREAM_HISTORY_MAX_LIMIT = 200;
 
 export const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -618,7 +621,17 @@ app.get("/api/streams/:id/history", (req: Request, res: Response) => {
     return;
   }
 
-  res.json({ data: getStreamHistory(parsedId.value) });
+  // Parse and validate query parameters
+  const limit = Math.min(
+    Math.max(1, parseInt(req.query.limit as string) || STREAM_HISTORY_DEFAULT_LIMIT),
+    STREAM_HISTORY_MAX_LIMIT
+  );
+  const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
+
+  const total = countStreamEvents(parsedId.value);
+  const data = getStreamHistory(parsedId.value, limit, offset);
+
+  res.json({ data, total, limit, offset });
 });
 
 app.get("/api/streams/:id/snapshot", (req: Request, res: Response) => {
