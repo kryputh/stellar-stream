@@ -81,7 +81,7 @@ export function verifyChallengeAndIssueToken(
       );
     }
 
-    const token = jwt.sign({ accountId: clientAccountID }, JWT_SECRET, {
+    const token = jwt.sign({ accountId: clientAccountID }, getJwtSecret(), {
       expiresIn: "24h",
     });
     return token;
@@ -104,7 +104,6 @@ export function authMiddleware(
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     sendApiError(req, res, 401, "Missing or invalid authorization header.", {
       code: "UNAUTHORIZED",
-      requestId: (req as any).requestId,
     });
     return;
   }
@@ -118,7 +117,6 @@ export function authMiddleware(
   } catch (error) {
     sendApiError(req, res, 401, "Invalid or expired authorization token.", {
       code: "UNAUTHORIZED",
-      requestId: (req as any).requestId,
     });
   }
 }

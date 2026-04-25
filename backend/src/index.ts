@@ -19,9 +19,10 @@ import {
   getStreamHistory,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
-import { initIndexer, startIndexer } from "./services/indexer";
+import { initIndexer, startIndexer, getCircuitBreakerStatus } from "./services/indexer";
 import { startReconciliationJob } from "./services/reconciliationJob";
 import { startWebhookWorker } from "./services/webhookWorker";
+import { getDeadLetters, countDeadLetters } from "./services/webhook";
 import {
   calculateProgress,
   cancelStream,
@@ -35,6 +36,7 @@ import {
   syncStreams,
   updateStreamStartAt,
 } from "./services/streamStore";
+
 import {
   authMiddleware,
   generateChallenge,
@@ -47,6 +49,7 @@ import {
   senderAccountIdSchema,
   streamIdSchema,
   updateStreamStartAtSchema,
+  webhookRegistrationSchema,
 } from "./validation/schemas";
 import { validateEnv } from "./config/validateEnv";
 
@@ -128,6 +131,12 @@ app.get("/api/health", (_req: Request, res: Response) => {
     service: "stellar-stream-backend",
     status: "ok",
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/metrics", (_req: Request, res: Response) => {
+  res.json({
+    indexer_circuit_breaker: getCircuitBreakerStatus(),
   });
 });
 
@@ -228,28 +237,34 @@ app.get("/api/events", (req: Request, res: Response) => {
 
 
 app.get("/api/streams/export.csv", (req: Request, res: Response) => {
+  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(req, res, parsedQuery.error.issues);
+    return;
+  }
+
+  const query = parsedQuery.data;
   let data = listStreams().map((stream) => ({
     ...stream,
     progress: calculateProgress(stream),
   }));
 
-  const { status, asset, sender, recipient } = req.query;
-  if (status && typeof status === "string") {
-    data = data.filter((stream) => stream.progress.status === status);
+  if (query.status) {
+    data = data.filter((stream) => stream.progress.status === query.status);
   }
-  if (asset && typeof asset === "string") {
+  if (query.asset) {
     data = data.filter(
-      (stream) => stream.assetCode.toLowerCase() === asset.toLowerCase(),
+      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
     );
   }
-  if (sender && typeof sender === "string") {
+  if (query.sender) {
     data = data.filter(
-      (stream) => stream.sender.toLowerCase() === sender.toLowerCase(),
+      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
     );
   }
-  if (recipient && typeof recipient === "string") {
+  if (query.recipient) {
     data = data.filter(
-      (stream) => stream.recipient.toLowerCase() === recipient.toLowerCase(),
+      (stream) => stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
     );
   }
 
@@ -278,17 +293,19 @@ app.get("/api/streams/:id", (req: Request, res: Response) => {
     return;
   }
 
-  res.json({ data: { 
-    ...stream, 
-    progress: calculateProgress(stream) 
-  } });
+  res.json({
+    data: {
+      ...stream,
+      progress: calculateProgress(stream)
+    }
+  });
 });
 
 app.get("/api/recipients/:accountId/streams", (req: Request, res: Response) => {
   const parsedParams = recipientAccountIdSchema.safeParse({
     accountId: req.params.accountId,
   });
-  
+
   if (!parsedParams.success) {
     sendValidationError(req, res, parsedParams.error.issues);
     return;
@@ -302,7 +319,7 @@ app.get("/api/recipients/:accountId/streams", (req: Request, res: Response) => {
     return;
   }
   const query = parsedQuery.data;
-  
+
   let data = listStreamsByRecipient(accountId)
     .map((stream) => ({
       ...stream,
@@ -473,14 +490,7 @@ app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => 
     return;
   }
 
-  const user = (req as any).user;
 
-  if (!user) {
-    sendApiError(req, res, 401, "Authentication required.", {
-      code: "UNAUTHORIZED",
-    });
-    return;
-  }
 
   try {
     const stream = await createStream(parsedBody.data);
@@ -524,7 +534,7 @@ app.post(
     }
 
     try {
-      const canceledStream = cancelStream(parsedId.value);
+
       res.json({ data: { ...canceledStream, progress: calculateProgress(canceledStream) } });
     } catch (error: any) {
       console.error("Failed to cancel stream:", error);
@@ -566,42 +576,19 @@ app.patch(
       return;
     }
 
-    const stream = getStream(parsedId.value);
-    if (!stream) {
-      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
-      return;
-    }
-
-    const currentUser = (req as any).user;
-    if (currentUser && stream.sender !== currentUser.accountId) {
-      sendApiError(req, res, 403, "Only the sender can update the start time.", {
-        code: "FORBIDDEN",
-      });
-      return;
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    const newStartAt = parsedBody.data.startAt;
-
-    if (newStartAt < now) {
-      sendApiError(req, res, 400, "Start time cannot be in the past.", {
-        code: "INVALID_START_TIME",
-      });
-      return;
-    }
 
     try {
-      const updatedStream = updateStreamStartAt(parsedId.value, newStartAt);
-      res.json({ data: { ...updatedStream, progress: calculateProgress(updatedStream) } });
-    } catch (error: any) {
-      const normalizedError = normalizeUnknownApiError(
-        error,
-        "Failed to update stream start time.",
-      );
-      sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
-        code: normalizedError.code ?? "INTERNAL_ERROR",
-      });
-    }
+  const updatedStream = updateStreamStartAt(parsedId.value, newStartAt);
+  res.json({ data: { ...updatedStream, progress: calculateProgress(updatedStream) } });
+} catch (error: any) {
+  const normalizedError = normalizeUnknownApiError(
+    error,
+    "Failed to update stream start time.",
+  );
+  sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+    code: normalizedError.code ?? "INTERNAL_ERROR",
+  });
+}
   },
 );
 
@@ -661,16 +648,50 @@ app.get("/api/open-issues", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/webhooks/dead-letters", authMiddleware, (req: Request, res: Response) => {
+  const page = req.query.page ? parseInt(req.query.page as string, 10) : PAGINATION_DEFAULT_PAGE;
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : PAGINATION_DEFAULT_LIMIT;
+
+  if (isNaN(page) || page < 1) {
+    sendApiError(req, res, 400, "page must be a positive integer", { code: "VALIDATION_ERROR" });
+    return;
+  }
+
+  if (isNaN(limit) || limit < 1 || limit > PAGINATION_MAX_LIMIT) {
+    sendApiError(req, res, 400, `limit must be between 1 and ${PAGINATION_MAX_LIMIT}`, { code: "VALIDATION_ERROR" });
+    return;
+  }
+
+  try {
+    const total = countDeadLetters();
+    const offset = (page - 1) * limit;
+    const data = getDeadLetters(limit, offset);
+
+    res.json({
+      data,
+      total,
+      page,
+      limit,
+    });
+  } catch (error: any) {
+    console.error("Failed to fetch dead-letter webhooks:", error);
+    const normalizedError = normalizeUnknownApiError(error, "Failed to fetch dead-letter webhooks.");
+    sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+      code: normalizedError.code ?? "INTERNAL_ERROR",
+    });
+  }
+});
 
 
- 
+
+
 async function startServer() {
   // ── Validate environment first — exits with code 1 on bad config ──────
   const config = validateEnv();
- 
+
   await initSoroban();
   await syncStreams();
- 
+
   // Initialize and start event indexer
   if (config.sorobanEnabled && config.contractId) {
     initIndexer(config.rpcUrl, config.contractId, config.networkPassphrase);
@@ -681,12 +702,12 @@ async function startServer() {
   } else {
     console.warn("CONTRACT_ID not set, event indexer will not start");
   }
- 
+
   app.listen(config.port, () => {
     console.log(`StellarStream API listening on http://localhost:${config.port}`);
   });
 }
- 
+
 if (require.main === module) {
   startServer().catch(console.error);
 }
