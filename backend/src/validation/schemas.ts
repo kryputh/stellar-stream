@@ -1,8 +1,13 @@
 import { z } from "zod";
+import { StrKey } from "@stellar/stellar-sdk";
 
 export const STELLAR_ACCOUNT_REGEX = /^G[A-Z2-7]{55}$/;
 export const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
 export const STREAM_ID_REGEX = /^[1-9]\d*$/;
+
+export function isStellarPublicKey(value: string): boolean {
+  return StrKey.isValidEd25519PublicKey(value);
+}
 
 export const streamIdSchema = z
   .string()
@@ -13,10 +18,7 @@ export const stellarAccountIdSchema = z
   .string()
   .trim()
   .min(1, "Account ID is required.")
-  .regex(
-    STELLAR_ACCOUNT_REGEX,
-    "Must be a valid Stellar account ID (starts with G and is exactly 56 characters).",
-  );
+  .refine(isStellarPublicKey, "must be a valid Stellar account ID");
 
 export const assetCodeSchema = z
   .string()
@@ -83,6 +85,26 @@ export const updateStreamStartAtSchema = z.object({
 });
 
 const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated"] as const;
+
+export const webhookRegistrationSchema = z.object({
+  url: z
+    .string()
+    .url("url must be a valid URL")
+    .refine((url) => url.startsWith("https://"), "url must use https:// protocol"),
+  events: z
+    .array(z.string())
+    .min(1, "events must be a non-empty array")
+    .refine(
+      (events) => events.every((e) => (VALID_EVENT_TYPES as readonly string[]).includes(e)),
+      {
+        message: `events must only contain: ${VALID_EVENT_TYPES.join(", ")}`,
+      },
+    ),
+  secret: z
+    .string()
+    .min(16, "secret must be at least 16 characters if provided")
+    .optional(),
+});
 
 export const listEventsQuerySchema = z.object({
   eventType: z
