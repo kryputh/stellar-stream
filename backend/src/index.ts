@@ -34,6 +34,7 @@ import {
   listStreams,
   listStreamsByRecipient,
   listStreamsBySender,
+  refreshStreamStatuses,
   StreamStatus,
   syncStreams,
   updateStreamStartAt,
@@ -42,6 +43,7 @@ import {
 import {
   authMiddleware,
   generateChallenge,
+  refreshToken,
   verifyChallengeAndIssueToken,
 } from "./services/auth";
 import {
@@ -489,6 +491,9 @@ app.post("/api/auth/token", (req: Request, res: Response) => {
   }
 });
 
+// POST /api/auth/refresh — accepts a valid Bearer JWT, returns a new one with fresh 24h expiry
+app.post("/api/auth/refresh", refreshToken);
+
 app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => {
   const parsedBody = createStreamPayloadWithAllowedAssetsSchema(ALLOWED_ASSETS).safeParse(
     req.body,
@@ -547,6 +552,79 @@ app.post(
     } catch (error: any) {
       console.error("Failed to cancel stream:", error);
       const normalizedError = normalizeUnknownApiError(error, "Failed to cancel stream.");
+      sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+        code: normalizedError.code ?? "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// POST /api/streams/:id/claim — recipient claims vested tokens
+app.post(
+  "/api/streams/:id/claim",
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.recipient !== user.accountId) {
+      sendApiError(req, res, 403, "Only the recipient can claim this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    const progress = calculateProgress(stream);
+    if (progress.vestedAmount <= 0) {
+      sendApiError(req, res, 400, "No claimable amount available.", {
+        code: "NO_CLAIMABLE_AMOUNT",
+      });
+      return;
+    }
+
+    try {
+      // Record the claim event in the local DB.
+      // In a full on-chain implementation this would submit a `claim` Soroban tx.
+      const db = (await import("./services/db")).getDb();
+      const { recordEventWithDb } = await import("./services/eventHistory");
+      const now = Math.floor(Date.now() / 1000);
+      db.transaction(() => {
+        recordEventWithDb(
+          db,
+          stream.id,
+          "claimed",
+          now,
+          stream.recipient,
+          progress.vestedAmount,
+          { assetCode: stream.assetCode },
+        );
+      })();
+
+      const history = await import("./services/eventHistory").then((m) =>
+        m.getStreamHistory(stream.id),
+      );
+
+      res.json({
+        result: {
+          claimedAmount: progress.vestedAmount,
+          assetCode: stream.assetCode,
+          txHash: `local-${stream.id}-${now}`,
+        },
+        history,
+      });
+    } catch (error: any) {
+      console.error("Failed to record claim:", error);
+      const normalizedError = normalizeUnknownApiError(error, "Failed to process claim.");
       sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
         code: normalizedError.code ?? "INTERNAL_ERROR",
       });
@@ -708,6 +786,33 @@ async function startServer() {
 
   await initSoroban();
   await syncStreams();
+
+  // Run refreshStreamStatuses on startup and then on a configurable interval.
+  // STATUS_REFRESH_INTERVAL_MS=0 disables automatic refresh.
+  const statusRefreshInterval = Number(
+    process.env.STATUS_REFRESH_INTERVAL_MS ?? 60_000,
+  );
+  const runRefresh = () => {
+    try {
+      const transitioned = refreshStreamStatuses();
+      if (transitioned > 0) {
+        console.log(
+          `[status-refresh] ${transitioned} stream(s) transitioned to completed`,
+        );
+      }
+    } catch (err) {
+      console.error("[status-refresh] failed:", err);
+    }
+  };
+  runRefresh(); // run once on startup
+  if (statusRefreshInterval > 0) {
+    setInterval(runRefresh, statusRefreshInterval);
+    console.log(
+      `[status-refresh] scheduled every ${statusRefreshInterval}ms`,
+    );
+  } else {
+    console.log("[status-refresh] automatic refresh disabled (interval=0)");
+  }
 
   // Archive old streams on startup
   await archiveOldStreams();

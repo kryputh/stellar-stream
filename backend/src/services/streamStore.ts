@@ -10,6 +10,7 @@ import {
   Networks,
   Account,
 } from "@stellar/stellar-sdk";
+import pLimit from "p-limit";
 import { initDb, getDb } from "./db";
 import { recordEventWithDb } from "./eventHistory";
 import { streamHasEvent } from "./eventHistory";
@@ -383,26 +384,66 @@ export async function syncStreams() {
   const sorobanContext = getSorobanContext();
   if (!sorobanContext) return;
 
+  const syncStart = Date.now();
+
   try {
     const sourceAccount = await sorobanContext.sourceAccountPromise;
     const nextId = await fetchNextOnChainStreamId(
       sorobanContext.contract,
       sourceAccount,
     );
-    if (nextId === null) {
-      return;
+    if (nextId === null) return;
+
+    const ids = Array.from({ length: nextId - 1 }, (_, i) => i + 1);
+
+    // Concurrency-limited parallel fetch — max 5 simultaneous RPC calls.
+    // Falls back to sequential per-stream if the parallel pass throws.
+    const limit = pLimit(5);
+    let parallelFailed = false;
+
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          limit(async () => {
+            const stream = await fetchOnChainStreamRecord(
+              sorobanContext.contract,
+              sourceAccount,
+              id,
+            );
+            if (stream) upsertStream(stream);
+          }),
+        ),
+      );
+    } catch (err) {
+      console.warn(
+        "[syncStreams] parallel fetch failed, falling back to sequential",
+        err,
+      );
+      parallelFailed = true;
     }
 
-    for (let i = 1; i < nextId; i++) {
-      const stream = await fetchOnChainStreamRecord(
-        sorobanContext.contract,
-        sourceAccount,
-        i,
-      );
-      if (stream) {
-        upsertStream(stream);
+    if (parallelFailed) {
+      for (const id of ids) {
+        try {
+          const stream = await fetchOnChainStreamRecord(
+            sorobanContext.contract,
+            sourceAccount,
+            id,
+          );
+          if (stream) upsertStream(stream);
+        } catch (e) {
+          console.error(
+            `[syncStreams] failed to fetch stream ${id} sequentially`,
+            e,
+          );
+        }
       }
     }
+
+    const elapsed = Date.now() - syncStart;
+    console.log(
+      `[syncStreams] completed in ${elapsed}ms (${ids.length} stream(s))`,
+    );
   } catch (err) {
     console.error("Failed to sync streams", err);
   }

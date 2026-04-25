@@ -322,6 +322,48 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/auth/refresh": {
+      post: {
+        summary: "Refresh JWT",
+        description:
+          "Accepts a still-valid Bearer JWT and returns a new token with a fresh 24h expiry. " +
+          "Use this to avoid forcing users to re-sign a Stellar challenge transaction every day.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "New JWT issued",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    token: {
+                      type: "string",
+                      description: "New JWT valid for 24 hours.",
+                      example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "401": {
+            description: "Missing, invalid, or expired token",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: { type: "string", example: "Invalid or expired authorization token." },
+                    code: { type: "string", example: "UNAUTHORIZED" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/assets": {
       get: {
         summary: "List allowed assets",

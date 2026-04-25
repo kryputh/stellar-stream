@@ -94,6 +94,41 @@ export function verifyChallengeAndIssueToken(
   }
 }
 
+/**
+ * Refreshes a still-valid JWT and returns a new one with a fresh 24h expiry.
+ *
+ * Accepts the current token in the Authorization header (Bearer scheme).
+ * Returns 401 if the token is missing, malformed, or already expired.
+ */
+export function refreshToken(req: Request, res: Response): void {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    sendApiError(req, res, 401, "Missing or invalid authorization header.", {
+      code: "UNAUTHORIZED",
+    });
+    return;
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, getJwtSecret()) as AuthUser;
+
+    const newToken = jwt.sign(
+      { accountId: decoded.accountId },
+      getJwtSecret(),
+      { expiresIn: "24h" },
+    );
+
+    res.json({ token: newToken });
+  } catch {
+    sendApiError(req, res, 401, "Invalid or expired authorization token.", {
+      code: "UNAUTHORIZED",
+    });
+  }
+}
+
 export function authMiddleware(
   req: Request,
   res: Response,
