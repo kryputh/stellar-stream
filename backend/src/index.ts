@@ -25,6 +25,7 @@ import { startReconciliationJob } from "./services/reconciliationJob";
 import { startWebhookWorker } from "./services/webhookWorker";
 import { getDeadLetters, countDeadLetters } from "./services/webhook";
 import {
+  archiveOldStreams,
   calculateProgress,
   cancelStream,
   createStream,
@@ -88,6 +89,10 @@ const listStreamsQuerySchema = z.object({
   sender: z.string().trim().optional(),
   asset: z.string().trim().optional(),
   q: z.string().trim().optional(),
+  include_archived: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
   page: z
     .coerce.number()
     .int("page must be an integer")
@@ -160,7 +165,7 @@ app.get("/api/streams", (req: Request, res: Response) => {
   const hasPage = req.query.page !== undefined;
   const hasLimit = req.query.limit !== undefined;
 
-  let data = listStreams().map((stream) => ({
+  let data = listStreams(query.include_archived).map((stream) => ({
     ...stream,
     progress: calculateProgress(stream),
   }));
@@ -247,7 +252,7 @@ app.get("/api/streams/export.csv", (req: Request, res: Response) => {
   }
 
   const query = parsedQuery.data;
-  let data = listStreams().map((stream) => ({
+  let data = listStreams(query.include_archived).map((stream) => ({
     ...stream,
     progress: calculateProgress(stream),
   }));
@@ -537,7 +542,7 @@ app.post(
     }
 
     try {
-
+      const canceledStream = await cancelStream(parsedId.value);
       res.json({ data: { ...canceledStream, progress: calculateProgress(canceledStream) } });
     } catch (error: any) {
       console.error("Failed to cancel stream:", error);
@@ -579,19 +584,18 @@ app.patch(
       return;
     }
 
-
     try {
-  const updatedStream = updateStreamStartAt(parsedId.value, newStartAt);
-  res.json({ data: { ...updatedStream, progress: calculateProgress(updatedStream) } });
-} catch (error: any) {
-  const normalizedError = normalizeUnknownApiError(
-    error,
-    "Failed to update stream start time.",
-  );
-  sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
-    code: normalizedError.code ?? "INTERNAL_ERROR",
-  });
-}
+      const updatedStream = updateStreamStartAt(parsedId.value, parsedBody.data.startAt);
+      res.json({ data: { ...updatedStream, progress: calculateProgress(updatedStream) } });
+    } catch (error: any) {
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to update stream start time.",
+      );
+      sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+        code: normalizedError.code ?? "INTERNAL_ERROR",
+      });
+    }
   },
 );
 
@@ -704,6 +708,21 @@ async function startServer() {
 
   await initSoroban();
   await syncStreams();
+
+  // Archive old streams on startup
+  await archiveOldStreams();
+
+  // Schedule archive job to run every 24 hours
+  setInterval(async () => {
+    try {
+      const archived = await archiveOldStreams();
+      if (archived > 0) {
+        console.log(`[scheduler] archived ${archived} stream(s)`);
+      }
+    } catch (err) {
+      console.error("[scheduler] archive job failed:", err);
+    }
+  }, 24 * 60 * 60 * 1000);
 
   // Initialize and start event indexer
   if (config.sorobanEnabled && config.contractId) {

@@ -39,7 +39,24 @@ function migrate(): void {
       start_at        INTEGER NOT NULL,
       created_at      INTEGER NOT NULL,
       canceled_at     INTEGER,
-      completed_at    INTEGER
+      completed_at    INTEGER,
+      refunded_amount REAL,
+      archived_at     INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS stream_archive (
+      id              TEXT PRIMARY KEY,
+      sender          TEXT NOT NULL,
+      recipient       TEXT NOT NULL,
+      asset_code      TEXT NOT NULL,
+      total_amount    REAL NOT NULL,
+      duration_seconds INTEGER NOT NULL,
+      start_at        INTEGER NOT NULL,
+      created_at      INTEGER NOT NULL,
+      canceled_at     INTEGER,
+      completed_at    INTEGER,
+      refunded_amount REAL,
+      archived_at     INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS stream_events (
