@@ -568,6 +568,3 @@ describe("GET /api/events", () => {
   });
 });
 
-
-  });
-});

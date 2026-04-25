@@ -18,7 +18,7 @@ import {
   getStreamHistory,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
-import { initIndexer, startIndexer } from "./services/indexer";
+import { initIndexer, startIndexer, getCircuitBreakerStatus } from "./services/indexer";
 import { startReconciliationJob } from "./services/reconciliationJob";
 import { startWebhookWorker } from "./services/webhookWorker";
 import { getDeadLetters, countDeadLetters } from "./services/webhook";
@@ -35,12 +35,7 @@ import {
   syncStreams,
   updateStreamStartAt,
 } from "./services/streamStore";
-import {
-  getGlobalEvents,
-  countAllEvents,
-  getStreamHistory,
-  getAllEvents,
-} from "./services/eventHistory";
+
 import {
   authMiddleware,
   generateChallenge,
@@ -135,6 +130,12 @@ app.get("/api/health", (_req: Request, res: Response) => {
     service: "stellar-stream-backend",
     status: "ok",
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/metrics", (_req: Request, res: Response) => {
+  res.json({
+    indexer_circuit_breaker: getCircuitBreakerStatus(),
   });
 });
 
@@ -313,7 +314,7 @@ app.get("/api/recipients/:accountId/streams", (req: Request, res: Response) => {
 
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    sendValidationError(res, parsedQuery.error.issues);
+    sendValidationError(req, res, parsedQuery.error.issues);
     return;
   }
   const query = parsedQuery.data;
@@ -480,6 +481,7 @@ app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => 
     return;
   }
 
+
   try {
     const stream = await createStream(parsedBody.data);
     res.status(201).json({
@@ -523,7 +525,12 @@ app.post(
     }
 
     try {
-
+      const canceledStream = await cancelStream(parsedId.value);
+      if (!canceledStream) {
+        res.status(404).json({ error: "Stream not found or could not be canceled.", requestId: req.requestId });
+        return;
+      }
+      res.json({ data: { ...canceledStream, progress: calculateProgress(canceledStream) } });
     } catch (error: any) {
       console.error("Failed to cancel stream:", error);
       const normalizedError = normalizeUnknownApiError(error, "Failed to cancel stream.");
@@ -568,26 +575,10 @@ app.patch(
       return;
     }
 
-    const stream = getStream(parsedId.value);
-    if (!stream) {
-      res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
-      return;
-    }
-
-    const user = (req as any).user;
-    if (stream.sender !== user.accountId) {
-      res.status(403).json({
-        error: "Only the sender can update the start time.",
-        requestId: req.requestId,
-      });
-      return;
-    }
-
     const now = Math.floor(Date.now() / 1000);
     const newStartAt = parsedBody.data.startAt;
 
-    return;
-  }
+
 
     try {
   const updatedStream = updateStreamStartAt(parsedId.value, newStartAt);

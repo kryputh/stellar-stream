@@ -8,6 +8,7 @@ import {
   TimeoutInfinite,
   TransactionBuilder,
   Networks,
+  Account,
 } from "@stellar/stellar-sdk";
 import { initDb, getDb } from "./db";
 import { recordEventWithDb } from "./eventHistory";
@@ -142,7 +143,7 @@ function round(value: number): number {
 function getSorobanContext():
   | {
       contract: Contract;
-      sourceAccountPromise: Promise<rpc.Api.GetAccountResponse>;
+      sourceAccountPromise: Promise<Account>;
     }
   | undefined {
   const contractId = process.env.CONTRACT_ID;
@@ -162,7 +163,7 @@ function getSorobanContext():
 
 async function simulateContractCall(
   contract: Contract,
-  sourceAccount: rpc.Api.GetAccountResponse,
+  sourceAccount: Account,
   method: string,
   ...args: any[]
 ): Promise<rpc.Api.SimulateTransactionResponse> {
@@ -183,7 +184,7 @@ async function simulateContractCall(
 
 async function fetchNextOnChainStreamId(
   contract: Contract,
-  sourceAccount: rpc.Api.GetAccountResponse,
+  sourceAccount: Account,
 ): Promise<number | null> {
   const simRes = await simulateContractCall(
     contract,
@@ -201,7 +202,7 @@ async function fetchNextOnChainStreamId(
 
 async function fetchOnChainStreamRecord(
   contract: Contract,
-  sourceAccount: rpc.Api.GetAccountResponse,
+  sourceAccount: Account,
   id: number,
 ): Promise<StreamRecord | null> {
   const simRes = await simulateContractCall(
