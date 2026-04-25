@@ -28,7 +28,7 @@ export function buildApiErrorResponse(
   return {
     error,
     statusCode,
-    requestId: req.requestId,
+    requestId: req.requestId, // Automatically included from requestLogger middleware
     code: options.code,
     details: options.details,
   };
@@ -53,6 +53,17 @@ export function sendValidationError(
     code: "VALIDATION_ERROR",
     details: zodIssuesToValidationIssues(issues),
   });
+}
+
+export function sendError(
+  res: Response,
+  status: number,
+  message: string,
+  req: Request,
+  options: ApiErrorOptions = {}
+) {
+  // Helper function for consistent error responses with requestId
+  return res.status(status).json(buildApiErrorResponse(req, status, message, options));
 }
 
 export function normalizeUnknownApiError(

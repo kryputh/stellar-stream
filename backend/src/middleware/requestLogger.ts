@@ -4,13 +4,13 @@ import crypto from "crypto";
 declare global {
   namespace Express {
     interface Request {
-      requestId?: string;
+      requestId?: string; // Unique ID for log correlation
     }
   }
 }
 
 export function requestLogger(req: Request, res: Response, next: NextFunction) {
-  // ✅ STEP 1: Generate unique request ID
+  // ✅ STEP 1: Generate unique request ID for log correlation
   const requestId = crypto.randomUUID();
   req.requestId = requestId;
 
