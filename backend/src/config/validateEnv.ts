@@ -44,7 +44,7 @@ const envSchema = z.object({
   DB_PATH: z.string().optional().default("backend/data/streams.db"),
   WEBHOOK_DESTINATION_URL: z.string().optional(),
   WEBHOOK_SIGNING_SECRET: z.string().optional(),
-  JWT_SECRET: z.string().optional().default("default_local_dev_secret_key"),
+  JWT_SECRET: z.string().optional(),
   SERVER_SIGNING_KEY: z.string().optional(),
   DOMAIN: z.string().optional().default("localhost"),
   SOROBAN_DISABLED: z.string().optional(),

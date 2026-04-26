@@ -3,8 +3,9 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, IntoVal,
+    token, Address, Env, IntoVal, symbol_short,
 };
+use insta::assert_debug_snapshot as assert_snapshot;
 
 fn create_token(env: &Env, admin: &Address) -> Address {
     let token_contract_id = env.register_stellar_asset_contract_v2(admin.clone());
@@ -457,6 +458,74 @@ fn test_event_emissions() {
             sender: sender.clone(),
         }
     );
+}
+
+#[test]
+fn test_stream_created_snapshot() {
+    let env = Env::default();
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = Address::generate(&env);
+    
+    let event = StreamCreated {
+        stream_id: 1,
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token.clone(),
+        total_amount: 1000,
+        start_time: 100,
+        end_time: 200,
+    };
+    
+    assert_snapshot!("stream_created_event", event);
+}
+
+#[test]
+fn test_claimable_at_start_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &1000, &2000);
+    assert_eq!(client.claimable(&stream_id, &1000), 0);
+}
+
+#[test]
+fn test_claimable_at_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &1000, &2000);
+    assert_eq!(client.claimable(&stream_id, &2000), 1000);
+}
+
+#[test]
+fn test_claimable_after_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &1000, &2000);
+    assert_eq!(client.claimable(&stream_id, &2100), 1000);
 }
 
 

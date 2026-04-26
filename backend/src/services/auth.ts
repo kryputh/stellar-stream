@@ -5,6 +5,7 @@ import {
   WebAuth,
 } from "@stellar/stellar-sdk";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sendApiError } from "../apiErrors";
 
@@ -16,8 +17,22 @@ const SERVER_SIGNING_KEY =
 const DOMAIN = (process.env.DOMAIN || "localhost").trim();
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 
+let jwtSecret = process.env.JWT_SECRET;
+
+if (!jwtSecret) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET must be set in production");
+  }
+
+  jwtSecret = crypto.randomBytes(32).toString("hex");
+
+  console.warn(
+    "JWT_SECRET not set — using ephemeral secret. All tokens will be invalidated on restart.",
+  );
+}
+
 function getJwtSecret() {
-  return process.env.JWT_SECRET || "default_local_dev_secret_key";
+  return jwtSecret as string;
 }
 
 export interface AuthUser {
