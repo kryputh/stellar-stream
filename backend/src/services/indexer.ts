@@ -14,6 +14,69 @@ let networkPassphrase: string = Networks.TESTNET;
 let lastProcessedLedger = 0;
 let indexerInterval: NodeJS.Timeout | null = null;
 
+export enum CircuitState {
+  CLOSED = "CLOSED",
+  OPEN = "OPEN",
+  HALF_OPEN = "HALF_OPEN",
+}
+
+class CircuitBreaker {
+  private state: CircuitState = CircuitState.CLOSED;
+  private failureCount: number = 0;
+  private lastFailureTime: number = 0;
+  private readonly failureThreshold: number = 5;
+  private readonly timeoutMs: number;
+
+  constructor(timeoutMs: number = 60000) {
+    this.timeoutMs = timeoutMs;
+  }
+
+  public getState(): CircuitState {
+    if (this.state === CircuitState.OPEN) {
+      const now = Date.now();
+      if (now - this.lastFailureTime >= this.timeoutMs) {
+        this.setState(CircuitState.HALF_OPEN);
+      }
+    }
+    return this.state;
+  }
+
+  public onSuccess(): void {
+    if (this.state !== CircuitState.CLOSED) {
+      console.log(`[Circuit Breaker] Probe successful. Resetting to CLOSED state.`);
+      this.setState(CircuitState.CLOSED);
+    }
+    this.failureCount = 0;
+  }
+
+  public onFailure(): void {
+    this.failureCount++;
+    this.lastFailureTime = Date.now();
+    
+    if (this.state === CircuitState.CLOSED && this.failureCount >= this.failureThreshold) {
+      console.log(`[Circuit Breaker] ${this.failureThreshold} consecutive failures reached. Opening circuit.`);
+      this.setState(CircuitState.OPEN);
+    } else if (this.state === CircuitState.HALF_OPEN) {
+      console.log(`[Circuit Breaker] Probe failed in HALF_OPEN state. Re-opening circuit.`);
+      this.setState(CircuitState.OPEN);
+    }
+  }
+
+  private setState(newState: CircuitState): void {
+    if (this.state !== newState) {
+      console.log(`[Circuit Breaker] State Transition: ${this.state} -> ${newState}`);
+      this.state = newState;
+    }
+  }
+}
+
+const CIRCUIT_BREAKER_TIMEOUT_MS = Number(process.env.CIRCUIT_BREAKER_TIMEOUT_MS ?? 60000);
+const circuitBreaker = new CircuitBreaker(CIRCUIT_BREAKER_TIMEOUT_MS);
+
+export function getCircuitBreakerStatus(): CircuitState {
+  return circuitBreaker.getState();
+}
+
 export function initIndexer(
   rpcUrl: string,
   contractIdParam: string,
@@ -57,6 +120,11 @@ async function indexEvents(): Promise<void> {
     return;
   }
 
+  const state = circuitBreaker.getState();
+  if (state === CircuitState.OPEN) {
+    return;
+  }
+
   try {
     const db = getDb();
     const latestLedger = await rpcServer.getLatestLedger();
@@ -77,6 +145,7 @@ async function indexEvents(): Promise<void> {
     }
 
     if (currentLedger <= lastProcessedLedger) {
+      circuitBreaker.onSuccess();
       return;
     }
 
@@ -103,7 +172,10 @@ async function indexEvents(): Promise<void> {
         "INSERT INTO indexer_cursor (id, last_ledger) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_ledger = excluded.last_ledger",
       ).run(contractId, lastProcessedLedger);
     })();
+
+    circuitBreaker.onSuccess();
   } catch (err) {
+    circuitBreaker.onFailure();
     console.error("Failed to index events:", err);
   }
 }

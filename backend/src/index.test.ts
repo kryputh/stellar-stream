@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+
 
 const streamStoreMocks = vi.hoisted(() => ({
   calculateProgress: vi.fn(),
@@ -22,7 +22,13 @@ const eventHistoryMocks = vi.hoisted(() => ({
 vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
 
+const TEST_JWT_SECRET = "test_secret_for_integration";
+
 import { app } from "./index";
+
+beforeAll(() => {
+  vi.stubEnv("JWT_SECRET", TEST_JWT_SECRET);
+});
 
 type TestStream = {
   id: string;
@@ -46,11 +52,17 @@ type TestProgress = {
   percentComplete: number;
 };
 
+const SENDER_A = "GA6W6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAA";
+const SENDER_B = "GA6W6BBBBBBBBBBW6BBBBBBBBBBW6BBBBBBBBBBW6BBBBBBBBBBW6BBB";
+const SENDER_C = "GA6W6CCCCCCCCCCW6CCCCCCCCCCW6CCCCCCCCCCW6CCCCCCCCCCW6CCC";
+const RECIPIENT_1 = "GA6W61111111111W61111111111W61111111111W61111111111W6111";
+const RECIPIENT_2 = "GA6W62222222222W62222222222W62222222222W62222222222W6222";
+
 const streams: TestStream[] = [
   {
     id: "4",
-    sender: "GSENDERAAAA",
-    recipient: "GRECIPIENT111",
+    sender: SENDER_A,
+    recipient: RECIPIENT_1,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -59,8 +71,8 @@ const streams: TestStream[] = [
   },
   {
     id: "3",
-    sender: "GSENDERBBBB",
-    recipient: "GRECIPIENT222",
+    sender: SENDER_B,
+    recipient: RECIPIENT_2,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -70,8 +82,8 @@ const streams: TestStream[] = [
   },
   {
     id: "2",
-    sender: "GSENDERAAAA",
-    recipient: "GRECIPIENT222",
+    sender: SENDER_A,
+    recipient: RECIPIENT_2,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -80,8 +92,8 @@ const streams: TestStream[] = [
   },
   {
     id: "1",
-    sender: "GSENDERCCCC",
-    recipient: "GRECIPIENT111",
+    sender: SENDER_C,
+    recipient: RECIPIENT_1,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -142,7 +154,41 @@ function invokeListStreamsRoute(
   let statusCode = 200;
   let jsonBody: any;
 
-  const req = { query };
+  const req = { query, requestId: "test-request-id" };
+  const res = {
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(payload: any) {
+      jsonBody = payload;
+      return this;
+    },
+  };
+
+  handler(req, res);
+
+  return { status: statusCode, body: jsonBody };
+}
+
+function invokeSenderStreamsRoute(
+  accountId: string,
+  query: Record<string, unknown> = {},
+): { status: number; body: any } {
+  const layer = (app as any)?._router?.stack?.find(
+    (entry: any) => entry.route?.path === "/api/senders/:accountId/streams" && entry.route?.methods?.get,
+  );
+
+  if (!layer) {
+    throw new Error("GET /api/senders/:accountId/streams route not found");
+  }
+
+  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+
+  let statusCode = 200;
+  let jsonBody: any;
+
+  const req = { params: { accountId }, query, requestId: "test-request-id" };
   const res = {
     status(code: number) {
       statusCode = code;
@@ -190,7 +236,7 @@ describe("GET /api/streams", () => {
   });
 
   it("filters by sender exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ sender: "GSENDERAAAA" });
+    const { status, body } = invokeListStreamsRoute({ sender: SENDER_A });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -198,7 +244,7 @@ describe("GET /api/streams", () => {
   });
 
   it("filters by recipient exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ recipient: "GRECIPIENT111" });
+    const { status, body } = invokeListStreamsRoute({ recipient: RECIPIENT_1 });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -207,8 +253,8 @@ describe("GET /api/streams", () => {
 
   it("applies combined sender + recipient + status filtering", () => {
     const { status, body } = invokeListStreamsRoute({
-      sender: "GSENDERAAAA",
-      recipient: "GRECIPIENT222",
+      sender: SENDER_A,
+      recipient: RECIPIENT_2,
       status: "scheduled",
     });
 
@@ -252,6 +298,16 @@ describe("GET /api/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("status must be one of");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "status",
+        }),
+      ]),
+    );
   });
 
   it("returns 400 for invalid page", () => {
@@ -259,6 +315,8 @@ describe("GET /api/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("page must be greater than or equal to 1");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns 400 for invalid limit", () => {
@@ -266,6 +324,8 @@ describe("GET /api/streams", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("limit must be less than or equal to 100");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns empty data for out-of-range page with metadata intact", () => {
@@ -280,6 +340,57 @@ describe("GET /api/streams", () => {
     expect(body.page).toBe(2);
     expect(body.limit).toBe(1);
     expect(body.data).toEqual([]);
+  });
+});
+
+describe("GET /api/senders/:accountId/streams", () => {
+  it("returns streams for a specific sender", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A);
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.data.every((s: any) => s.sender === SENDER_A)).toBe(true);
+  });
+
+  it("filters by status", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { status: "active" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.data[0].id).toBe("4");
+  });
+
+  it("filters by asset", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { asset: "USDC" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+  });
+
+  it("filters by search term", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { q: "GA6W6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAA" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+  });
+
+  it("returns 400 for invalid account ID", () => {
+    const { status, body } = invokeSenderStreamsRoute("invalid_account");
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("Must be a valid Stellar account ID");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("paginates correctly", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { limit: "1" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(1);
+    expect(body.limit).toBe(1);
   });
 });
 
@@ -319,7 +430,7 @@ function invokeGlobalEventsRoute(
   let statusCode = 200;
   let jsonBody: any;
 
-  const req = { query };
+  const req = { query, requestId: "test-request-id" };
   const res = {
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
@@ -404,6 +515,8 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("eventType must be one of");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns 400 for page < 1", () => {
@@ -411,6 +524,8 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("page must be greater than or equal to 1");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns 400 for limit > 100", () => {
@@ -418,6 +533,8 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(400);
     expect(body.error).toContain("limit must be less than or equal to 100");
+    expect(body.statusCode).toBe(400);
+    expect(body.requestId).toBe("test-request-id");
   });
 
   it("returns empty data array for out-of-range page with metadata intact", () => {
@@ -450,3 +567,4 @@ describe("GET /api/events", () => {
     });
   });
 });
+

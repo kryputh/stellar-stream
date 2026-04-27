@@ -10,17 +10,41 @@ export function getAuthToken(): string | null {
   return authToken;
 }
 
+export class ApiError extends Error {
+  statusCode: number;
+  details?: unknown;
+
+  constructor(message: string, statusCode: number, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.statusCode = statusCode;
+    this.details = details;
+  }
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
-  const body = (await response.json().catch(() => ({}))) as T & {
-    error?: string;
-  };
+  const rawBody = await response.text();
+  let body: Record<string, unknown> = {};
+  if (rawBody) {
+    try {
+      body = JSON.parse(rawBody) as Record<string, unknown>;
+    } catch {
+      body = { message: rawBody };
+    }
+  }
+
   if (!response.ok) {
     if (response.status === 401) {
       setAuthToken(null);
     }
-    throw new Error(body.error ?? "Unexpected API error");
+    const message =
+      (body.error as string | undefined) ??
+      (body.message as string | undefined) ??
+      "Unexpected API error";
+    throw new ApiError(message, response.status, body);
   }
-  return body;
+
+  return body as T;
 }
 
 export interface ListStreamsFilters {
@@ -144,5 +168,11 @@ export async function getStreamHistory(streamId: string): Promise<StreamEvent[]>
 export async function listAllEvents(): Promise<StreamEvent[]> {
   const response = await fetch(`${API_BASE}/events`);
   const body = await parseResponse<{ data: StreamEvent[] }>(response);
+  return body.data;
+}
+
+export async function getStream(streamId: string): Promise<Stream> {
+  const response = await fetch(`${API_BASE}/streams/${encodeURIComponent(streamId)}`);
+  const body = await parseResponse<{ data: Stream }>(response);
   return body.data;
 }

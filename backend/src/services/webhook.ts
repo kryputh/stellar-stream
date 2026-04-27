@@ -1,6 +1,7 @@
 import { getDb } from "./db";
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 5;
+const RETRY_DELAYS = [5, 15, 60, 300, 900]; // seconds: 5s, 15s, 60s, 300s, 900s
 
 export const triggerWebhook = async (event: string, data: any): Promise<void> => {
   const url = process.env.WEBHOOK_DESTINATION_URL;
@@ -25,7 +26,7 @@ export const triggerWebhook = async (event: string, data: any): Promise<void> =>
     `);
 
     // Queue for immediate delivery relative to the worker's polling cycle
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
     stmt.run(
       streamId,
       event,
@@ -41,3 +42,25 @@ export const triggerWebhook = async (event: string, data: any): Promise<void> =>
     console.error(`[Webhook] Failed to queue webhook event ${event}:`, error);
   }
 };
+
+export function getDeadLetters(limit = 100, offset = 0): any[] {
+  const db = getDb();
+  return db
+    .prepare(`SELECT * FROM webhook_dead_letters ORDER BY failed_at DESC LIMIT ? OFFSET ?`)
+    .all(limit, offset);
+}
+
+export function countDeadLetters(): number {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM webhook_dead_letters`)
+    .get() as { count: number };
+  return row.count;
+}
+
+export function getRetryDelaySeconds(attemptNumber: number): number {
+  if (attemptNumber < 0 || attemptNumber >= RETRY_DELAYS.length) {
+    return RETRY_DELAYS[RETRY_DELAYS.length - 1];
+  }
+  return RETRY_DELAYS[attemptNumber];
+}

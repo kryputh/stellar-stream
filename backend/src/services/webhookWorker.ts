@@ -1,5 +1,7 @@
 import axios from "axios";
+import { createHmac } from "crypto";
 import { getDb } from "./db";
+import { getRetryDelaySeconds } from "./webhook";
 
 let isProcessing = false;
 let pollingInterval: NodeJS.Timeout | null = null;
@@ -16,7 +18,7 @@ export const processWebhookQueue = async () => {
     }
 
     const db = getDb();
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
 
     // Fetch pending deliveries that are due
     const pendingDeliveries = db
@@ -35,18 +37,33 @@ export const processWebhookQueue = async () => {
       let errorMsg = null;
 
       try {
-        await axios.post(url, {
+        const timestamp = new Date().toISOString();
+        const body = {
           event,
           payload: parsedPayload,
-          timestamp: new Date().toISOString(),
-        });
+          timestamp,
+        };
+        const bodyString = JSON.stringify(body);
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+
+        const signingSecret = process.env.WEBHOOK_SIGNING_SECRET;
+        if (signingSecret) {
+          const signature = createHmac("sha256", signingSecret)
+            .update(bodyString)
+            .digest("hex");
+          headers["X-Webhook-Signature"] = `sha256=${signature}`;
+        }
+
+        await axios.post(url, bodyString, { headers });
         success = true;
       } catch (error: any) {
         errorMsg = error.message || "Unknown error";
         console.error(`[WebhookWorker] Delivery attempt ${attempt + 1} failed for delivery ${id}:`, errorMsg);
       }
 
-      const updateNow = Date.now();
+      const updateNow = Math.floor(Date.now() / 1000);
 
       if (success) {
         // Mark as success
@@ -58,19 +75,25 @@ export const processWebhookQueue = async () => {
         // Handle failure and retries
         const newAttempt = attempt + 1;
         if (newAttempt >= max_attempts) {
+          // Move to dead-letter storage
+          db.prepare(
+            `INSERT INTO webhook_dead_letters (url, payload, last_error, failed_at)
+             VALUES (?, ?, ?, ?)`
+          ).run(url, payload, errorMsg, updateNow);
+
           db.prepare(
             `UPDATE webhook_deliveries SET status = 'failed', attempt = ?, last_attempt_at = ?, error_message = ? WHERE id = ?`
           ).run(newAttempt, updateNow, errorMsg, id);
-          console.error(`[WebhookWorker] Delivery ${id} (${event}) permanently failed after max attempts.`);
+          console.error(`[WebhookWorker] Delivery ${id} (${event}) permanently failed after max attempts. Moved to dead-letter storage.`);
         } else {
-          // Exponential backoff: 2s, 4s, 8s, etc. (Can be adjusted)
-          const delayMs = Math.pow(2, newAttempt) * 1000;
-          const nextRetry = updateNow + delayMs;
-          
+          // Use configured retry delays: 5s, 15s, 60s, 300s, 900s
+          const delaySeconds = getRetryDelaySeconds(newAttempt - 1);
+          const nextRetry = updateNow + delaySeconds;
+
           db.prepare(
             `UPDATE webhook_deliveries SET attempt = ?, last_attempt_at = ?, next_retry_at = ?, error_message = ? WHERE id = ?`
           ).run(newAttempt, updateNow, nextRetry, errorMsg, id);
-          console.log(`[WebhookWorker] Delivery ${id} scheduled for retry at ${new Date(nextRetry).toISOString()}`);
+          console.log(`[WebhookWorker] Delivery ${id} scheduled for retry in ${delaySeconds}s at ${new Date(nextRetry * 1000).toISOString()}`);
         }
       }
     }

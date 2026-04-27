@@ -3,13 +3,32 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, IntoVal,
+    token, Address, Env, IntoVal, Vec, symbol_short,
 };
+use insta::assert_debug_snapshot as assert_snapshot;
 
 fn create_token(env: &Env, admin: &Address) -> Address {
     let token_contract_id = env.register_stellar_asset_contract_v2(admin.clone());
     token_contract_id.address()
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Returns a simple one-entry metadata map for use in tests.
+fn make_metadata(env: &Env) -> Map<String, String> {
+    let mut m = Map::new(env);
+    m.set(
+        String::from_str(env, "department"),
+        String::from_str(env, "engineering"),
+    );
+    m
+}
+
+// ---------------------------------------------------------------------------
+// Existing stream-lifecycle tests (metadata = None)
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_get_next_stream_id() {
@@ -407,6 +426,7 @@ fn test_event_emissions() {
     );
 
     let event_data: StreamCreated = last_event.2.into_val(&env);
+    let expected_symbol = token::Client::new(&env, &token).symbol();
     assert_eq!(
         event_data,
         StreamCreated {
@@ -414,6 +434,7 @@ fn test_event_emissions() {
             sender: sender.clone(),
             recipient: recipient.clone(),
             token: token.clone(),
+            token_symbol: expected_symbol,
             total_amount: 1000,
             start_time: 0,
             end_time: 1000,
