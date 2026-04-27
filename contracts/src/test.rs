@@ -3,7 +3,7 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, IntoVal, symbol_short,
+    token, Address, Env, IntoVal, Vec, symbol_short,
 };
 use insta::assert_debug_snapshot as assert_snapshot;
 
@@ -408,6 +408,7 @@ fn test_event_emissions() {
     );
 
     let event_data: StreamCreated = last_event.2.into_val(&env);
+    let expected_symbol = token::Client::new(&env, &token).symbol();
     assert_eq!(
         event_data,
         StreamCreated {
@@ -415,6 +416,7 @@ fn test_event_emissions() {
             sender: sender.clone(),
             recipient: recipient.clone(),
             token: token.clone(),
+            token_symbol: expected_symbol,
             total_amount: 1000,
             start_time: 0,
             end_time: 1000,
@@ -472,12 +474,142 @@ fn test_stream_created_snapshot() {
         sender: sender.clone(),
         recipient: recipient.clone(),
         token: token.clone(),
+        token_symbol: soroban_sdk::String::from_str(&env, "TEST"),
         total_amount: 1000,
         start_time: 100,
         end_time: 200,
     };
     
     assert_snapshot!("stream_created_event", event);
+}
+
+#[test]
+fn test_create_split_stream_creates_child_streams_and_links() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back((recipient_a.clone(), 400));
+    recipients.push_back((recipient_b.clone(), 600));
+
+    let parent_id = client.create_split_stream(&sender, &token, &1000, &0, &1000, &recipients);
+    let children = client.get_split_children(&parent_id);
+
+    assert_eq!(children.len(), 2);
+    let child_a_id = children.get(0).unwrap();
+    let child_b_id = children.get(1).unwrap();
+
+    let child_a = client.get_stream(&child_a_id);
+    let child_b = client.get_stream(&child_b_id);
+    assert_eq!(child_a.recipient, recipient_a);
+    assert_eq!(child_a.total_amount, 400);
+    assert_eq!(child_b.recipient, recipient_b);
+    assert_eq!(child_b.total_amount, 600);
+}
+
+#[test]
+fn test_split_stream_claim_and_cancel_work_per_substream() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back((recipient_a.clone(), 400));
+    recipients.push_back((recipient_b.clone(), 600));
+
+    let parent_id = client.create_split_stream(&sender, &token, &1000, &0, &1000, &recipients);
+    let children = client.get_split_children(&parent_id);
+    let child_a_id = children.get(0).unwrap();
+    let child_b_id = children.get(1).unwrap();
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&child_a_id, &recipient_a, &200);
+    client.cancel(&child_b_id, &sender);
+
+    assert_eq!(token_client.balance(&recipient_a), 200);
+    assert_eq!(token_client.balance(&sender), 300);
+    assert_eq!(client.claimable(&child_b_id, &1000), 300);
+}
+
+#[test]
+fn test_pause_resume_freezes_vesting_and_extends_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
+    env.ledger().with_mut(|l| l.timestamp = 300);
+    client.pause_stream(&stream_id, &sender);
+    assert_eq!(client.claimable(&stream_id, &450), 300);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.resume_stream(&stream_id, &sender);
+
+    assert_eq!(client.claimable(&stream_id, &700), 500);
+    assert_eq!(client.claimable(&stream_id, &1200), 1000);
+}
+
+#[test]
+fn test_vested_amount_fuzz_invariants() {
+    let env = Env::default();
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let stream = Stream {
+        sender,
+        recipient,
+        token,
+        total_amount: 1_000_000,
+        claimed_amount: 0,
+        start_time: 100,
+        end_time: 10_100,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+    };
+
+    let mut seed: u64 = 0xDEADBEEFCAFEBABE;
+    for _ in 0..2048 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let at_time = seed % 20_000;
+        let vested = vested_amount(&stream, at_time);
+        assert!(vested <= stream.total_amount);
+        assert!(vested >= 0);
+        if at_time <= stream.start_time {
+            assert_eq!(vested, 0);
+        }
+        if at_time >= stream.end_time {
+            assert_eq!(vested, stream.total_amount);
+        }
+    }
 }
 
 #[test]
