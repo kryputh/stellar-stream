@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    String, Vec,
+    Map, String, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -68,6 +68,14 @@ pub struct StreamClaimed {
 pub struct StreamCanceled {
     pub stream_id: u64,
     pub sender: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamTransferred {
+    pub stream_id: u64,
+    pub old_recipient: Address,
+    pub new_recipient: Address,
 }
 
 /// Emitted when an admin claws back tokens from a stream for compliance purposes.
@@ -379,6 +387,27 @@ impl StellarStreamContract {
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Canceled")),
             StreamCanceled { stream_id, sender },
+        );
+    }
+
+    pub fn transfer_stream(env: Env, stream_id: u64, new_recipient: Address) {
+        let mut stream = read_stream(&env, stream_id);
+        stream.recipient.require_auth();
+
+        let old_recipient = stream.recipient.clone();
+        stream.recipient = new_recipient.clone();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Transfer")),
+            StreamTransferred {
+                stream_id,
+                old_recipient,
+                new_recipient,
+            },
         );
     }
 
