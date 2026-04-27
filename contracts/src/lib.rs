@@ -5,6 +5,10 @@ use soroban_sdk::{
     String, Vec,
 };
 
+// ---------------------------------------------------------------------------
+// Stream struct
+// ---------------------------------------------------------------------------
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stream {
@@ -20,6 +24,10 @@ pub struct Stream {
     pub pause_started_at: Option<u64>,
 }
 
+// ---------------------------------------------------------------------------
+// Storage keys
+// ---------------------------------------------------------------------------
+
 #[contracttype]
 enum DataKey {
     NextStreamId,
@@ -27,6 +35,10 @@ enum DataKey {
     SplitChildren(u64),
     ChildToParent(u64),
 }
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +51,8 @@ pub struct StreamCreated {
     pub total_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
+    /// Metadata attached at creation time; None when no labels were provided.
+    pub metadata: Option<Map<String, String>>,
 }
 
 #[contracttype]
@@ -56,11 +70,41 @@ pub struct StreamCanceled {
     pub sender: Address,
 }
 
+/// Emitted when an admin claws back tokens from a stream for compliance purposes.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClawbackExecuted {
+    pub stream_id: u64,
+    pub amount: i128,
+    pub recipient: Address,
+}
+
+// ---------------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------------
+
 #[contract]
 pub struct StellarStreamContract;
 
 #[contractimpl]
 impl StellarStreamContract {
+    // -----------------------------------------------------------------------
+    // Initialization
+    // -----------------------------------------------------------------------
+
+    /// One-time setup: stores the admin address used for clawback authorization.
+    /// Panics if called a second time to prevent privilege escalation.
+    pub fn initialize(env: Env, admin: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    // -----------------------------------------------------------------------
+    // Stream creation
+    // -----------------------------------------------------------------------
+
     pub fn create_stream(
         env: Env,
         sender: Address,
@@ -69,6 +113,7 @@ impl StellarStreamContract {
         total_amount: i128,
         start_time: u64,
         end_time: u64,
+        metadata: Option<Map<String, String>>,
     ) -> u64 {
         sender.require_auth();
 
@@ -79,14 +124,13 @@ impl StellarStreamContract {
             panic!("end_time must be greater than start_time");
         }
 
-        // checks sebder balance.
         let token_client = TokenClient::new(&env, &token);
         let sender_balance = token_client.balance(&sender);
         if sender_balance < total_amount {
             panic!("insufficient sender balance");
         }
 
-        // escrow = transfer total_amount from sender into this contract
+        // Escrow: transfer total_amount from sender into this contract.
         let contract_address = env.current_contract_address();
         token_client.transfer(&sender, &contract_address, &total_amount);
 
@@ -128,6 +172,7 @@ impl StellarStreamContract {
                 total_amount,
                 start_time,
                 end_time,
+                metadata,
             },
         );
 
@@ -252,12 +297,12 @@ impl StellarStreamContract {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
-        if claimable < 0 {
-            0
-        } else {
-            claimable
-        }
+        if claimable < 0 { 0 } else { claimable }
     }
+
+    // -----------------------------------------------------------------------
+    // Claim
+    // -----------------------------------------------------------------------
 
     pub fn claim(env: Env, stream_id: u64, recipient: Address, amount: i128) -> i128 {
         if amount <= 0 {
@@ -273,17 +318,14 @@ impl StellarStreamContract {
         let now = env.ledger().timestamp();
         let claimable_now = Self::claimable(env.clone(), stream_id, now);
 
-        // amount claimed cannot exceed vested amount
         if amount > claimable_now {
             panic!("amount exceeds claimable");
         }
 
-        // transfer tokens from contract escrow to recipient
         let token_client = TokenClient::new(&env, &stream.token);
         let contract_address = env.current_contract_address();
         token_client.transfer(&contract_address, &recipient, &amount);
 
-        // Update accounting after successful transfer
         stream.claimed_amount += amount;
         env.storage()
             .persistent()
@@ -291,15 +333,15 @@ impl StellarStreamContract {
 
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Claimed")),
-            StreamClaimed {
-                stream_id,
-                recipient,
-                amount,
-            },
+            StreamClaimed { stream_id, recipient, amount },
         );
 
         amount
     }
+
+    // -----------------------------------------------------------------------
+    // Cancel
+    // -----------------------------------------------------------------------
 
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
         let mut stream = read_stream(&env, stream_id);
@@ -315,20 +357,12 @@ impl StellarStreamContract {
         let now = env.ledger().timestamp();
         stream.canceled = true;
 
-        // compute vested BEFORE truncating end_time
         let vested = vested_amount(&stream, now);
         let sender_refund = stream.total_amount - vested;
 
-        // truncate end_time so recipient can't claim past cancel point
-        let min_end = if now > stream.start_time {
-            now
-        } else {
-            stream.start_time
-        };
+        let min_end = if now > stream.start_time { now } else { stream.start_time };
         if min_end < stream.end_time {
             stream.end_time = min_end;
-            // Adjust total_amount to match the vested amount at cancel time
-            // This ensures that the vested calculation remains correct after truncation
             stream.total_amount = vested;
         }
 
@@ -393,6 +427,10 @@ impl StellarStreamContract {
             .set(&DataKey::Stream(stream_id), &stream);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn read_stream(env: &Env, stream_id: u64) -> Stream {
     env.storage()
