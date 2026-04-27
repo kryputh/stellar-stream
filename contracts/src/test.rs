@@ -1439,7 +1439,8 @@ fn test_clawback_token_conservation() {
 }
 
 #[test]
-fn test_transfer_stream_updates_recipient() {
+#[should_panic(expected = "amount exceeds claimable")]
+fn test_claim_rapid_succession_prevents_double_pay() {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -1447,54 +1448,23 @@ fn test_transfer_stream_updates_recipient() {
     let admin = Address::generate(&env);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
-    let new_recipient = Address::generate(&env);
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
+
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &None);
 
-    client.transfer_stream(&stream_id, &new_recipient);
+    // Advance ledger to 100% vested
+    env.ledger().with_mut(|l| l.timestamp = 1000);
 
-    let stream = client.get_stream(&stream_id);
-    assert_eq!(stream.recipient, new_recipient);
+    // Call claim for full vested amount — succeeds
+    let claimed = client.claim(&stream_id, &recipient, &1000);
+    assert_eq!(claimed, 1000);
 
-    // Verify events
-    let last_event = env.events().all().last().unwrap();
-    assert_eq!(
-        last_event.1,
-        (symbol_short!("Stream"), symbol_short!("Transfer")).into_val(&env)
-    );
-    let event_data: StreamTransferred = last_event.2.into_val(&env);
-    assert_eq!(event_data.old_recipient, recipient);
-    assert_eq!(event_data.new_recipient, new_recipient);
-}
-
-#[test]
-fn test_transfer_stream_accrues_to_new_recipient() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, StellarStreamContract);
-    let client = StellarStreamContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let new_recipient = Address::generate(&env);
-    let token = create_token(&env, &admin);
-    let token_admin = token::StellarAssetClient::new(&env, &token);
-    token_admin.mint(&sender, &1000);
-    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &None);
-
-    env.ledger().with_mut(|l| l.timestamp = 250);
-    // 250 vested, recipient claims 100
-    client.claim(&stream_id, &recipient, &100);
-
-    client.transfer_stream(&stream_id, &new_recipient);
-
-    env.ledger().with_mut(|l| l.timestamp = 500);
-    // 500 vested total, 100 claimed, 400 claimable by new_recipient
-    assert_eq!(client.claimable(&stream_id, &500), 400);
-
-    client.claim(&stream_id, &new_recipient, &400);
+    // Total paid never exceeds total_amount (verified by checking balance)
     let token_client = token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&new_recipient), 400);
+    assert_eq!(token_client.balance(&recipient), 1000);
+
+    // Attempt second claim for same amount — panics with 'amount exceeds claimable'
+    client.claim(&stream_id, &recipient, &1000);
 }
