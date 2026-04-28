@@ -486,9 +486,8 @@ app.post("/api/auth/token", (req: Request, res: Response) => {
     res.json({ token });
   } catch (error: any) {
     console.error("Failed to verify challenge:", error);
-    const normalizedError = normalizeUnknownApiError(error, "Failed to verify challenge.");
-    sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
-      code: normalizedError.code ?? "INTERNAL_ERROR",
+    sendApiError(req, res, 401, error.message || "Challenge verification failed.", {
+      code: "UNAUTHORIZED",
     });
   }
 });
