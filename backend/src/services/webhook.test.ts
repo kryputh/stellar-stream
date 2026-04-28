@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { getRetryDelaySeconds } from "./webhook";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { getRetryDelaySeconds, triggerWebhook, getDeadLetters } from "./webhook";
+import { initDb, getDb } from "./db";
+import fs from "fs";
+import path from "path";
+
+const TEST_DB_PATH = path.join(__dirname, "..", "..", "data", "webhook-test.db");
+
 
 describe("Webhook Retry Logic", () => {
     it("should return correct retry delays", () => {
@@ -24,5 +30,96 @@ describe("Webhook Retry Logic", () => {
     it("should have correct sequence: 5s, 15s, 60s, 300s, 900s", () => {
         const delays = [0, 1, 2, 3, 4].map((i) => getRetryDelaySeconds(i));
         expect(delays).toEqual([5, 15, 60, 300, 900]);
+    });
+});
+
+describe("Webhook triggerWebhook and getDeadLetters", () => {
+    let originalEnvUrl: string | undefined;
+
+    beforeEach(() => {
+        process.env.DB_PATH = TEST_DB_PATH;
+        initDb();
+        const db = getDb();
+        db.exec("DELETE FROM webhook_deliveries");
+        db.exec("DELETE FROM webhook_dead_letters");
+
+        originalEnvUrl = process.env.WEBHOOK_DESTINATION_URL;
+        process.env.WEBHOOK_DESTINATION_URL = "http://example.com/webhook";
+        
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        const db = getDb();
+        db.close();
+        if (fs.existsSync(TEST_DB_PATH)) {
+            fs.unlinkSync(TEST_DB_PATH);
+        }
+        process.env.WEBHOOK_DESTINATION_URL = originalEnvUrl;
+        vi.restoreAllMocks();
+    });
+
+    it("should insert a row with status = 'pending' and attempt = 0", async () => {
+        const db = getDb();
+        db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run("stream-123", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+
+        await triggerWebhook("test_event", { stream_id: "stream-123", value: 100 });
+        
+        const row = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("stream-123") as any;
+        
+        expect(row).toBeDefined();
+        expect(row.status).toBe("pending");
+        expect(row.attempt).toBe(0);
+        expect(row.event).toBe("test_event");
+        expect(row.payload).toBe(JSON.stringify({ stream_id: "stream-123", value: 100 }));
+        expect(row.max_attempts).toBe(5);
+    });
+
+    it("should early return and log when WEBHOOK_DESTINATION_URL is missing", async () => {
+        delete process.env.WEBHOOK_DESTINATION_URL;
+        
+        await triggerWebhook("test_event", { stream_id: "stream-123" });
+        
+        const db = getDb();
+        const count = db.prepare("SELECT count(*) as c FROM webhook_deliveries").get() as any;
+        
+        expect(count.c).toBe(0);
+        expect(console.log).toHaveBeenCalledWith(expect.stringContaining("WEBHOOK_DESTINATION_URL not set"));
+    });
+
+    it("should early return and log error when stream_id is missing from data", async () => {
+        await triggerWebhook("test_event", { some_other_id: "123" });
+        
+        const db = getDb();
+        const count = db.prepare("SELECT count(*) as c FROM webhook_deliveries").get() as any;
+        
+        expect(count.c).toBe(0);
+        expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Cannot map event test_event to a stream ID"), expect.anything());
+    });
+
+    it("should return dead letters ordered by failed_at DESC", () => {
+        const db = getDb();
+        
+        // Insert dummy dead letters out of order
+        const stmt = db.prepare(`
+            INSERT INTO webhook_dead_letters (url, payload, last_error, failed_at)
+            VALUES (?, ?, ?, ?)
+        `);
+        
+        stmt.run("http://u1", "p1", "err", 1000);
+        stmt.run("http://u2", "p2", "err", 3000);
+        stmt.run("http://u3", "p3", "err", 2000);
+        
+        const deadLetters = getDeadLetters();
+        
+        expect(deadLetters.length).toBe(3);
+        // Descending order checks
+        expect(deadLetters[0].url).toBe("http://u2"); // 3000
+        expect(deadLetters[1].url).toBe("http://u3"); // 2000
+        expect(deadLetters[2].url).toBe("http://u1"); // 1000
     });
 });
