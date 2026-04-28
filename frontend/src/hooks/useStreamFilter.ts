@@ -6,6 +6,7 @@ export interface StreamFilters {
   sender: string;
   recipient: string;
   assetCode: string;
+  q: string;
 }
 
 type FilterKey = keyof StreamFilters;
@@ -15,6 +16,7 @@ const EMPTY_FILTERS: StreamFilters = {
   sender: "",
   recipient: "",
   assetCode: "",
+  q: "",
 };
 
 function getFiltersFromUrl(): StreamFilters {
@@ -24,6 +26,7 @@ function getFiltersFromUrl(): StreamFilters {
     sender: params.get("sender") ?? "",
     recipient: params.get("recipient") ?? "",
     assetCode: params.get("assetCode") ?? params.get("asset") ?? "",
+    q: params.get("q") ?? "",
   };
 }
 
@@ -51,6 +54,7 @@ export function useStreamFilter(streams: Stream[]) {
     syncValue("sender");
     syncValue("recipient");
     syncValue("assetCode");
+    syncValue("q");
 
     const next = params.toString();
     const nextUrl = next ? `${window.location.pathname}?${next}` : window.location.pathname;
@@ -84,6 +88,15 @@ export function useStreamFilter(streams: Stream[]) {
         !includesCaseInsensitive(stream.assetCode, filters.assetCode)
       ) {
         return false;
+      }
+      if (filters.q) {
+        const search = filters.q.toLowerCase();
+        const matches =
+          stream.id.toLowerCase().includes(search) ||
+          stream.sender.toLowerCase().includes(search) ||
+          stream.recipient.toLowerCase().includes(search) ||
+          stream.assetCode.toLowerCase().includes(search);
+        if (!matches) return false;
       }
       return true;
     });

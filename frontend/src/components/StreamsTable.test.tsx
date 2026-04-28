@@ -29,9 +29,9 @@ const mockStreams: Stream[] = [
 const defaultProps = {
   streams: mockStreams,
   filters: {},
-  onFiltersChange: noop,
+  onFiltersChange: vi.fn(),
   onCancel: vi.fn().mockResolvedValue(undefined),
-  onEditStartTime: noop,
+  onEditStartTime: vi.fn(),
 };
 
 describe('StreamsTable Component', () => {

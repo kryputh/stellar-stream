@@ -26,6 +26,15 @@ export interface ClaimResponse {
   history: StreamEvent[];
 }
 
+export class SorobanClaimError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = "SorobanClaimError";
+    this.code = code;
+  }
+}
+
 /**
  * Claim vested tokens from a stream.
  *
@@ -34,7 +43,7 @@ export interface ClaimResponse {
  * @param amount         - Claimable amount as reported by the backend (for display only;
  *                         the contract determines the actual claimable amount on-chain).
  */
-export async function claimStream(
+export async function claimOnChain(
   streamId: string,
   recipientAddress: string,
   amount: number,
@@ -52,14 +61,18 @@ export async function claimStream(
 
   if (!response.ok) {
     let message = `Claim failed (${response.status})`;
+    let code = "UNKNOWN";
     try {
-      const body = (await response.json()) as { error?: string };
+      const body = (await response.json()) as { error?: string; code?: string };
       if (body.error) message = body.error;
+      if (body.code) code = body.code;
     } catch {
       // ignore JSON parse errors
     }
-    throw new Error(message);
+    throw new SorobanClaimError(message, code);
   }
 
   return response.json() as Promise<ClaimResponse>;
 }
+
+export const claimStream = claimOnChain;

@@ -7,13 +7,22 @@ type UseWebSocketResult<T> = {
 
 const BACKOFF_MS = [1000, 2000, 4000];
 
-export function useWebSocket<T>(url: string): UseWebSocketResult<T> {
+export function useWebSocket<T>(
+  url: string,
+  options?: { onMessage?: (data: T) => void },
+): UseWebSocketResult<T> {
   const [lastMessage, setLastMessage] = useState<T | null>(null);
   const [readyState, setReadyState] = useState<number>(WebSocket.CLOSED);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const closedByUnmountRef = useRef(false);
+  const onMessageRef = useRef(options?.onMessage);
+
+  // Keep the callback ref up to date
+  useEffect(() => {
+    onMessageRef.current = options?.onMessage;
+  }, [options?.onMessage]);
 
   useEffect(() => {
     if (!url) {
@@ -35,7 +44,9 @@ export function useWebSocket<T>(url: string): UseWebSocketResult<T> {
 
       socket.onmessage = (event: MessageEvent<string>) => {
         try {
-          setLastMessage(JSON.parse(event.data) as T);
+          const data = JSON.parse(event.data) as T;
+          setLastMessage(data);
+          onMessageRef.current?.(data);
         } catch {
           // Ignore malformed messages to keep the hook resilient.
         }

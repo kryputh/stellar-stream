@@ -6,7 +6,11 @@ import { useState, useEffect } from "react";
  * Intercepts component state to persist it to localStorage.
  * If the current value deep-equals the initial value, the draft is cleared.
  */
-export function useDraftAutosave<T>(key: string, initialValue: T) {
+export function useDraftAutosave<T>(
+  key: string,
+  initialValue: T,
+  debounceMs: number = 500,
+) {
   const [value, setValue] = useState<T>(() => {
     try {
       const item = window.localStorage.getItem(key);
@@ -32,19 +36,23 @@ export function useDraftAutosave<T>(key: string, initialValue: T) {
   });
 
   useEffect(() => {
-    try {
-      const stringified = JSON.stringify(value);
-      if (stringified === JSON.stringify(initialValue)) {
-        window.localStorage.removeItem(key);
-        setHasDraft(false);
-      } else {
-        window.localStorage.setItem(key, stringified);
-        setHasDraft(true);
+    const handler = setTimeout(() => {
+      try {
+        const stringified = JSON.stringify(value);
+        if (stringified === JSON.stringify(initialValue)) {
+          window.localStorage.removeItem(key);
+          setHasDraft(false);
+        } else {
+          window.localStorage.setItem(key, stringified);
+          setHasDraft(true);
+        }
+      } catch (error) {
+        console.warn(`Failed to save draft "${key}" to localStorage:`, error);
       }
-    } catch (error) {
-      console.warn(`Failed to save draft "${key}" to localStorage:`, error);
-    }
-  }, [key, value, initialValue]);
+    }, debounceMs);
+
+    return () => clearTimeout(handler);
+  }, [key, value, initialValue, debounceMs]);
 
   const clearDraft = () => {
     try {

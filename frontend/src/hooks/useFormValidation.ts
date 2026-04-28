@@ -50,6 +50,8 @@ export function validateForm(values: FormValues): FieldErrors {
     const recipientResult = stellarAccountIdSchema.safeParse(recipientTrimmed);
     if (!recipientResult.success) {
       errors.recipient = recipientResult.error.issues[0]?.message;
+    } else if (recipientTrimmed === senderTrimmed) {
+      errors.recipient = "Recipient cannot be the same as sender.";
     }
   }
 

@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    String, Vec,
+    Map, String, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -23,6 +23,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub metadata: Option<Map<String, String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,7 @@ pub struct Stream {
 
 #[contracttype]
 enum DataKey {
+    Admin,
     NextStreamId,
     Stream(u64),
     SplitChildren(u64),
@@ -68,6 +70,14 @@ pub struct StreamClaimed {
 pub struct StreamCanceled {
     pub stream_id: u64,
     pub sender: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamTransferred {
+    pub stream_id: u64,
+    pub old_recipient: Address,
+    pub new_recipient: Address,
 }
 
 /// Emitted when an admin claws back tokens from a stream for compliance purposes.
@@ -153,6 +163,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            metadata: metadata.clone(),
         };
 
         env.storage()
@@ -239,6 +250,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                metadata: None,
             };
             env.storage()
                 .persistent()
@@ -259,6 +271,7 @@ impl StellarStreamContract {
                     total_amount: allocation,
                     start_time,
                     end_time,
+                    metadata: None,
                 },
             );
         }
@@ -383,6 +396,27 @@ impl StellarStreamContract {
         );
     }
 
+    pub fn transfer_stream(env: Env, stream_id: u64, new_recipient: Address) {
+        let mut stream = read_stream(&env, stream_id);
+        stream.recipient.require_auth();
+
+        let old_recipient = stream.recipient.clone();
+        stream.recipient = new_recipient.clone();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Transfer")),
+            StreamTransferred {
+                stream_id,
+                old_recipient,
+                new_recipient,
+            },
+        );
+    }
+
     pub fn pause_stream(env: Env, stream_id: u64, sender: Address) {
         let mut stream = read_stream(&env, stream_id);
         if stream.sender != sender {
@@ -426,6 +460,59 @@ impl StellarStreamContract {
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
+    }
+
+    // -----------------------------------------------------------------------
+    // Clawback
+    // -----------------------------------------------------------------------
+
+    pub fn clawback(env: Env, stream_id: u64, amount: i128, admin: Address) -> i128 {
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
+        admin.require_auth();
+
+        let mut stream = read_stream(&env, stream_id);
+        let now = env.ledger().timestamp();
+        let vested = vested_amount(&stream, now);
+        let unclaimed_vested = vested - stream.claimed_amount;
+
+        let actual_clawback = if amount > unclaimed_vested {
+            unclaimed_vested
+        } else {
+            amount
+        };
+
+        if actual_clawback > 0 {
+            let token_client = TokenClient::new(&env, &stream.token);
+            let contract_address = env.current_contract_address();
+            token_client.transfer(&contract_address, &admin, &actual_clawback);
+
+            stream.claimed_amount += actual_clawback;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Stream(stream_id), &stream);
+
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("Clawback")),
+                ClawbackExecuted {
+                    stream_id,
+                    amount: actual_clawback,
+                    recipient: admin,
+                },
+            );
+        }
+
+        actual_clawback
     }
 }
 

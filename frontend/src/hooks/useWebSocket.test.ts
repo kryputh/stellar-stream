@@ -62,4 +62,50 @@ describe("useWebSocket", () => {
     });
     expect(MockWebSocket.instances).toHaveLength(4);
   });
+
+  it("calls onMessage handler for valid messages", async () => {
+    const onMessage = vi.fn();
+    const { result } = renderHook(() =>
+      useWebSocket<{ type: string; id: string }>("ws://localhost/test", {
+        onMessage,
+      }),
+    );
+
+    const payload = { type: "stream_update", id: "123" };
+    act(() => {
+      MockWebSocket.instances[0].emitMessage(payload);
+    });
+
+    expect(onMessage).toHaveBeenCalledWith(payload);
+    expect(result.current.lastMessage).toEqual(payload);
+  });
+
+  it("silently ignores malformed or unknown message types", async () => {
+    const onMessage = vi.fn();
+    const { result } = renderHook(() =>
+      useWebSocket<{ type: string }>("ws://localhost/test", { onMessage }),
+    );
+
+    act(() => {
+      // Malformed JSON should be caught by the try-catch in the hook
+      MockWebSocket.instances[0].onmessage?.({
+        data: "invalid json",
+      } as MessageEvent<string>);
+    });
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(result.current.lastMessage).toBeNull();
+  });
+
+  it("closes WebSocket cleanly on unmount", () => {
+    const { unmount } = renderHook(() =>
+      useWebSocket<{ type: string }>("ws://localhost/test"),
+    );
+    const socket = MockWebSocket.instances[0];
+    const closeSpy = vi.spyOn(socket, "close");
+
+    unmount();
+
+    expect(closeSpy).toHaveBeenCalled();
+  });
 });
