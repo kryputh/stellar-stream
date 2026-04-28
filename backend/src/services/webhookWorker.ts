@@ -1,7 +1,7 @@
 import axios from "axios";
-import { createHmac } from "crypto";
 import { getDb } from "./db";
 import { getRetryDelaySeconds } from "./webhook";
+import { getWebhookHeaders } from "./webhookSignature";
 
 let isProcessing = false;
 let pollingInterval: NodeJS.Timeout | null = null;
@@ -44,17 +44,7 @@ export const processWebhookQueue = async () => {
           timestamp,
         };
         const bodyString = JSON.stringify(body);
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-
-        const signingSecret = process.env.WEBHOOK_SIGNING_SECRET;
-        if (signingSecret) {
-          const signature = createHmac("sha256", signingSecret)
-            .update(bodyString)
-            .digest("hex");
-          headers["X-Webhook-Signature"] = `sha256=${signature}`;
-        }
+        const headers = getWebhookHeaders(bodyString, process.env.WEBHOOK_SIGNING_SECRET);
 
         await axios.post(url, bodyString, { headers });
         success = true;

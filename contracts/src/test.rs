@@ -3,7 +3,7 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, IntoVal, Vec, symbol_short,
+    token, Address, Env, IntoVal, Map, String, Vec, symbol_short,
 };
 use insta::assert_debug_snapshot as assert_snapshot;
 
@@ -584,7 +584,7 @@ fn test_pause_resume_freezes_vesting_and_extends_end_time() {
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
 
-    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &None);
     env.ledger().with_mut(|l| l.timestamp = 300);
     client.pause_stream(&stream_id, &sender);
     assert_eq!(client.claimable(&stream_id, &450), 300);
@@ -614,6 +614,7 @@ fn test_vested_amount_fuzz_invariants() {
         canceled: false,
         paused: false,
         pause_started_at: None,
+        metadata: None,
     };
 
     let mut seed: u64 = 0xDEADBEEFCAFEBABE;

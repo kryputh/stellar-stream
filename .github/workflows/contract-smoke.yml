@@ -1,0 +1,97 @@
+name: Contract Smoke Test
+
+on:
+  schedule:
+    # Run nightly at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  smoke-test:
+    name: Deploy and Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Install Soroban CLI
+        run: |
+          cargo install --locked soroban-cli --version 21.0.0
+
+      - name: Create Test Account
+        run: |
+          # Generate a new keypair for deployment
+          # We use a random seed for each run to ensure isolation
+          DEPLOYER_SECRET=$(soroban keys generate deployer --network testnet --format secret)
+          DEPLOYER_PUBLIC=$(soroban keys address deployer)
+          
+          echo "DEPLOYER_PUBLIC=$DEPLOYER_PUBLIC" >> $GITHUB_ENV
+          echo "SECRET_KEY=$DEPLOYER_SECRET" >> $GITHUB_ENV
+          
+          # Fund the account via Friendbot
+          curl -X GET "https://friendbot.stellar.org?addr=$DEPLOYER_PUBLIC"
+
+      - name: Build and Deploy Contract
+        run: |
+          # Run the existing deploy script
+          # It expects SECRET_KEY in the environment
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh
+          
+          # Extract contract ID from the file created by the script
+          CONTRACT_ID=$(cat contracts/contract_id.txt)
+          echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
+          echo "Contract deployed with ID: $CONTRACT_ID"
+
+      - name: Initialize Contract
+        run: |
+          # Call initialize(admin: Address)
+          soroban contract invoke \
+            --id $CONTRACT_ID \
+            --source-account deployer \
+            --network testnet \
+            -- \
+            initialize \
+            --admin $DEPLOYER_PUBLIC
+
+      - name: Smoke Test - create_stream
+        run: |
+          # We need a token address to create a stream. 
+          # On Testnet, the Native XLM token address is:
+          # CAS3J7GYCCXG7Y56Z47U7V3SCAH5B422N4PBBZ6Y6Z3G7E3RQXN4O76Q (for some environments)
+          # But it's safer to use the 'native' keyword if supported or a known testnet asset.
+          # For this smoke test, we'll use the Native XLM contract address on Testnet.
+          NATIVE_XLM="CDLZFC3SYJYDZT7K67VZ75YJFCVQELQQSTR2XTS2YPN6YGL67VTWXBCM"
+          
+          # Current time + 1 hour for start, + 2 hours for end
+          START_TIME=$(date +%s)
+          START_TIME=$((START_TIME + 3600))
+          END_TIME=$((START_TIME + 3600))
+          
+          # Call create_stream(sender, recipient, token, total_amount, start_time, end_time, metadata)
+          # Using deployer as both sender and recipient for simplicity in smoke test
+          soroban contract invoke \
+            --id $CONTRACT_ID \
+            --source-account deployer \
+            --network testnet \
+            -- \
+            create_stream \
+            --sender $DEPLOYER_PUBLIC \
+            --recipient $DEPLOYER_PUBLIC \
+            --token $NATIVE_XLM \
+            --total_amount 10000000 \
+            --start_time $START_TIME \
+            --end_time $END_TIME
+
+      - name: Upload Contract ID
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-id
+          path: contracts/contract_id.txt

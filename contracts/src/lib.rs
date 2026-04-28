@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    String, Vec,
+    Map, String, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -22,6 +22,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub metadata: Option<Map<String, String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,7 @@ pub struct Stream {
 
 #[contracttype]
 enum DataKey {
+    Admin,
     NextStreamId,
     Stream(u64),
     SplitChildren(u64),
@@ -152,6 +154,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            metadata: metadata.clone(),
         };
 
         env.storage()
@@ -238,6 +241,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                metadata: None,
             };
             env.storage()
                 .persistent()
@@ -258,6 +262,7 @@ impl StellarStreamContract {
                     total_amount: allocation,
                     start_time,
                     end_time,
+                    metadata: None,
                 },
             );
         }
@@ -425,6 +430,59 @@ impl StellarStreamContract {
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
+    }
+
+    // -----------------------------------------------------------------------
+    // Clawback
+    // -----------------------------------------------------------------------
+
+    pub fn clawback(env: Env, stream_id: u64, amount: i128, admin: Address) -> i128 {
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
+        admin.require_auth();
+
+        let mut stream = read_stream(&env, stream_id);
+        let now = env.ledger().timestamp();
+        let vested = vested_amount(&stream, now);
+        let unclaimed_vested = vested - stream.claimed_amount;
+
+        let actual_clawback = if amount > unclaimed_vested {
+            unclaimed_vested
+        } else {
+            amount
+        };
+
+        if actual_clawback > 0 {
+            let token_client = TokenClient::new(&env, &stream.token);
+            let contract_address = env.current_contract_address();
+            token_client.transfer(&contract_address, &admin, &actual_clawback);
+
+            stream.claimed_amount += actual_clawback;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Stream(stream_id), &stream);
+
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("Clawback")),
+                ClawbackExecuted {
+                    stream_id,
+                    amount: actual_clawback,
+                    recipient: admin,
+                },
+            );
+        }
+
+        actual_clawback
     }
 }
 
